@@ -127,9 +127,9 @@ function summarizeAttempts(attempts) {
 }
 
 const supabase = createClient();
-// Fixed demo credentials are enabled only for local development. Production builds
-// always use the configured Supabase providers.
-const AUTH_DEMO_MODE = process.env.NODE_ENV !== "production" && process.env.NEXT_PUBLIC_AUTH_DEMO_MODE === "true";
+// Explicit opt-in supports the requested temporary static sign-in on the live app.
+// Admin authorization stays server-side and does not accept demo sessions.
+const AUTH_DEMO_MODE = process.env.NEXT_PUBLIC_AUTH_DEMO_MODE === "true";
 const DEMO_USER_KEY = "pyq-demo-user";
 const DEMO_ADMIN_PHONES = new Set((process.env.NEXT_PUBLIC_DEMO_ADMIN_PHONES || "").split(",").map((value) => value.replace(/\D/g, "")).map((digits) => digits.length === 10 ? `91${digits}` : digits).filter(Boolean));
 function isDemoAdminUser(user) {

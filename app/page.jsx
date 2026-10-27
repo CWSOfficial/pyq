@@ -4,12 +4,6 @@ import { createElement, Fragment, useEffect, useRef, useState } from "react";
 import { createClient } from "../lib/supabase/client";
 import { Lottie } from "lottie-react";
 
-const sampleQuestions = [
-  { subject: "Polity", year: "2023", tag: "Fundamental Rights", isDemo: true, prompt: "Which of the following statements about the Right to Equality is correct?", options: ["It is available only to citizens", "It is available to every person in India", "It can never be restricted", "It applies only to public employment"], answer: 1, explanation: "Articles 14 to 18 use the term ‘person’ in several guarantees, so the protection is not limited to citizens." },
-  { subject: "History", year: "2022", tag: "Modern India", isDemo: true, prompt: "The first session of the Indian National Congress was held in which city?", options: ["Calcutta", "Madras", "Bombay", "Allahabad"], answer: 2, explanation: "The first session was held in Bombay in December 1885, presided over by W. C. Bonnerjee." },
-  { subject: "Geography", year: "2021", tag: "Indian Rivers", isDemo: true, prompt: "Which river is known as the ‘Dakshin Ganga’?", options: ["Krishna", "Godavari", "Kaveri", "Narmada"], answer: 1, explanation: "The Godavari is the longest river of peninsular India and is often called the Dakshin Ganga." },
-];
-
 const explanationTags = new Set(["p", "strong", "b", "em", "i", "ul", "ol", "li", "br"]);
 const voidExplanationTags = new Set(["br"]);
 
@@ -217,7 +211,7 @@ export default function Page() {
   const [authNotice, setAuthNotice] = useState("");
   const [user, setUser] = useState(null);
   const [authBusy, setAuthBusy] = useState(false);
-  const [questions, setQuestions] = useState(sampleQuestions);
+  const [questions, setQuestions] = useState([]);
   const [practiceCatalog, setPracticeCatalog] = useState(null);
   const [attemptHistory, setAttemptHistory] = useState([]);
   const [questionIndex, setQuestionIndex] = useState(0);
@@ -431,9 +425,6 @@ export default function Page() {
       }
       return { data: rows, error: null };
     })();
-    const bundledQuestions = fetch("/data/pyq-2026-practice.json", { cache: "force-cache" })
-      .then((result) => result.ok ? result.json() : [])
-      .catch(() => []);
     const onLocalQuestionBankChange = (event) => {
       if (event.key === "pyq-demo-music") {
         try { const settings = JSON.parse(event.newValue || "null"); if (settings) setMusicSettings(settings); } catch {}
@@ -446,22 +437,16 @@ export default function Page() {
         } catch {}
         return;
       }
-      if (event.key !== "pyq-demo-questions") return;
-      try { const rows = JSON.parse(event.newValue || "[]"); if (Array.isArray(rows) && rows.length) setQuestions(rows.map((item) => ({ ...item, year: String(item.year), tag: item.topic, answer: Number(item.correct_option) }))); } catch {}
     };
     window.addEventListener("storage", onLocalQuestionBankChange);
-    Promise.allSettled([databaseQuestions, bundledQuestions]).then(([databaseResult, bundledResult]) => {
+    databaseQuestions.then((databaseResult) => {
       if (!active) return;
-      const remote = databaseResult.status === "fulfilled" && !databaseResult.value.error
-        ? (databaseResult.value.data || []).map((item) => ({ ...item, year: String(item.year), tag: item.topic, answer: item.correct_option }))
-        : [];
-      const bundled = bundledResult.status === "fulfilled" && Array.isArray(bundledResult.value) ? bundledResult.value : [];
-      const remotePrompts = new Set(remote.map((item) => item.prompt.trim().toLocaleLowerCase()));
-      const localOnly = bundled.filter((item) => item.prompt && !remotePrompts.has(item.prompt.trim().toLocaleLowerCase()));
-      const available = remote.length || localOnly.length ? [...remote, ...localOnly] : sampleQuestions;
-      const localAdminRows = AUTH_DEMO_MODE ? readSaved("pyq-demo-questions", []) : [];
-      const localAdminPrompts = new Set(localAdminRows.map((item) => item.prompt?.trim().toLocaleLowerCase()).filter(Boolean));
-      setQuestions(localAdminRows.length ? [...localAdminRows.map((item) => ({ ...item, year: String(item.year), tag: item.topic, answer: Number(item.correct_option) })), ...available.filter((item) => !localAdminPrompts.has(item.prompt?.trim().toLocaleLowerCase()))] : available);
+      setQuestions((databaseResult.data || []).map((item) => ({ ...item, year: String(item.year), tag: item.topic, answer: item.correct_option })));
+    }).catch((error) => {
+      if (!active) return;
+      setQuestions([]);
+      console.error("Could not load questions from Supabase", error);
+      setToast("Could not load questions from the question bank. Please try again.");
     });
     const onInstall = (event) => { event.preventDefault(); setInstallPrompt(event); };
     const onInstalled = () => { setInstallPrompt(null); setIsInstalledApp(true); setToast("PYQ Cloud was added to your home screen."); };

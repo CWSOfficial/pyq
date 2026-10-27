@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { createClient } from "../../lib/supabase/client";
 
-const AUTH_DEMO_MODE = process.env.NEXT_PUBLIC_AUTH_DEMO_MODE === "true";
+const AUTH_DEMO_MODE = process.env.NEXT_PUBLIC_CLIENT_DEMO_MODE === "true" || process.env.NEXT_PUBLIC_AUTH_DEMO_MODE === "true";
 const DEMO_USER_KEY = "pyq-demo-user";
 const DEMO_QUESTIONS_KEY = "pyq-demo-questions";
 const DEMO_MUSIC_KEY = "pyq-demo-music";

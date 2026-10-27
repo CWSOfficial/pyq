@@ -437,11 +437,20 @@ export default function Page() {
         } catch {}
         return;
       }
+      if (event.key === "pyq-demo-questions") {
+        try {
+          const rows = JSON.parse(event.newValue || "[]");
+          if (Array.isArray(rows)) setQuestions(rows.map((item) => ({ ...item, year: String(item.year), tag: item.topic, answer: Number(item.correct_option) })));
+        } catch {}
+      }
     };
     window.addEventListener("storage", onLocalQuestionBankChange);
     databaseQuestions.then((databaseResult) => {
       if (!active) return;
-      setQuestions((databaseResult.data || []).map((item) => ({ ...item, year: String(item.year), tag: item.topic, answer: item.correct_option })));
+      const supabaseRows = databaseResult.data || [];
+      const demoRows = AUTH_DEMO_MODE ? readSaved("pyq-demo-questions", []) : [];
+      const sourceRows = demoRows.length ? demoRows : supabaseRows;
+      setQuestions(sourceRows.map((item) => ({ ...item, year: String(item.year), tag: item.topic, answer: item.correct_option })));
     }).catch((error) => {
       if (!active) return;
       setQuestions([]);

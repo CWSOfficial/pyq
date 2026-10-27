@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { createClient } from "../../lib/supabase/client";
 
-const AUTH_DEMO_MODE = process.env.NODE_ENV !== "production" && process.env.NEXT_PUBLIC_AUTH_DEMO_MODE === "true";
+const AUTH_DEMO_MODE = process.env.NEXT_PUBLIC_AUTH_DEMO_MODE === "true";
 const DEMO_USER_KEY = "pyq-demo-user";
 const DEMO_QUESTIONS_KEY = "pyq-demo-questions";
 const DEMO_MUSIC_KEY = "pyq-demo-music";
@@ -105,8 +105,22 @@ export default function AdminPage() {
     if (!accessToken && AUTH_DEMO_MODE) {
       const demoUser = JSON.parse(localStorage.getItem(DEMO_USER_KEY) || "null");
       if (!isDemoAdmin(demoUser)) throw new Error("Sign in with an authorized local demo admin account to manage the demo question bank.");
-      let rows = JSON.parse(localStorage.getItem(DEMO_QUESTIONS_KEY) || "[]");
       const parsedUrl = new URL(url, window.location.origin);
+      const storedRows = localStorage.getItem(DEMO_QUESTIONS_KEY);
+      let rows = storedRows ? JSON.parse(storedRows) : [];
+      if (!storedRows && parsedUrl.pathname === "/api/admin/questions") {
+        rows = [];
+        for (let offset = 0; offset < 5000; offset += 1000) {
+          const { data, error } = await supabase.from("questions")
+            .select("id, subject, year, exam, topic, prompt, options, correct_option, explanation, question_number")
+            .order("year", { ascending: false }).order("question_number", { ascending: true, nullsFirst: false })
+            .range(offset, offset + 999);
+          if (error) throw new Error("Could not load the Supabase question bank for this demo.");
+          rows.push(...(data || []));
+          if ((data || []).length < 1000) break;
+        }
+        localStorage.setItem(DEMO_QUESTIONS_KEY, JSON.stringify(rows));
+      }
       const body = JSON.parse(options.body || "{}");
       if (parsedUrl.pathname === "/api/admin/users") throw new Error("Registered user records are not available in local demo mode. Configure the Supabase server key to manage real accounts.");
       if (parsedUrl.pathname === "/api/admin/catalog") {
@@ -461,13 +475,13 @@ export default function AdminPage() {
 
         <section className="admin-card" id="users"><div className="admin-list-heading"><div><h2>User accounts</h2><p>View registered profiles, update a name, or permanently remove an account.</p></div><button className="admin-button secondary" onClick={() => loadUsers(1)} disabled={usersBusy}>{usersBusy ? "Loading…" : "Load users"}</button></div>
           {usersError && !demoAdmin && <p className="admin-field-error" role="alert">{usersError}</p>}
-          {demoAdmin && <div className="admin-demo-note">This browser is in local demo mode, so it has no real user directory. Set the server-only Supabase key in the deployment environment to enable registered-account management.</div>}
+          {demoAdmin && <div className="admin-demo-note">Client demo mode: questions start from Supabase, but edits are saved only in this browser. Real user accounts are not available in this demo.</div>}
           <form className="admin-user-search" onSubmit={(event) => { event.preventDefault(); loadUsers(1, userSearch); }}><input aria-label="Search users" placeholder="Search name, email or phone" value={userSearch} onChange={(event) => setUserSearch(event.target.value)} /><button className="admin-button primary" type="submit" disabled={usersBusy}>Search</button></form>
           {editingUser && <form className="admin-user-edit" onSubmit={saveUserName}><div><b>Edit profile</b><small>{editingUser.email || editingUser.phone}</small></div><label>Full name<input value={editingUserName} onChange={(event) => setEditingUserName(event.target.value)} maxLength={80} required /></label><button className="admin-button primary" type="submit" disabled={usersBusy}>{usersBusy ? "Saving…" : "Save profile"}</button><button className="admin-button secondary" type="button" onClick={() => setEditingUser(null)}>Cancel</button></form>}
           {users.length ? <div className="admin-table-wrap"><table className="admin-users-table"><thead><tr><th>User</th><th>Contact</th><th>Joined</th><th>Actions</th></tr></thead><tbody>{users.map((user) => <tr key={user.id}><td><b>{user.fullName || "Name not provided"}</b><small>{user.isAdmin ? "Admin account · protected" : user.confirmed ? "Verified account" : "Unverified account"}</small></td><td>{user.email || user.phone || "No contact details"}</td><td>{user.createdAt ? new Date(user.createdAt).toLocaleDateString() : "—"}</td><td><div className="admin-row-actions"><button className="admin-edit-button" disabled={usersBusy} onClick={() => { setEditingUser(user); setEditingUserName(user.fullName || ""); }}>Edit name</button><button className="admin-remove-button" disabled={usersBusy || user.isAdmin} onClick={() => removeUser(user)}>Delete</button></div></td></tr>)}</tbody></table></div> : <div className="admin-empty">{usersBusy ? "Loading users…" : demoAdmin ? "Registered profiles will appear here after server access is configured." : usersError ? "User list unavailable." : "Load users to see registered profiles."}</div>}
           {(users.length > 0 || usersPage > 1) && <div className="admin-pagination"><span>Page {usersPage}</span><div><button className="admin-button secondary" disabled={usersPage <= 1 || usersBusy} onClick={() => loadUsers(usersPage - 1)}>Previous</button><button className="admin-button secondary" disabled={!usersHasMore || usersBusy} onClick={() => loadUsers(usersPage + 1)}>Next</button></div></div>}
         </section>
-    <footer className="admin-footer">{demoAdmin ? "Local demo mode: edits stay in this browser only." : "Question content is saved to the configured Supabase project. Admin actions require server-verified access."}</footer>
+    <footer className="admin-footer">{demoAdmin ? "Client demo mode: admin edits stay in this browser and do not change Supabase." : "Question content is saved to the configured Supabase project. Admin actions require server-verified access."}</footer>
       </section>
     </div>
   </main>;

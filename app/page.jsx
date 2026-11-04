@@ -167,6 +167,9 @@ const figmaAsset = {
 
 export default function Page() {
   const [screen, setScreen] = useState("Welcome");
+  const screenRef = useRef("Welcome");
+  const screenHistoryRef = useRef([]);
+  const exitPromptTimeRef = useRef(0);
   const [timeGreeting, setTimeGreeting] = useState("Good evening");
   const [selectedYear, setSelectedYear] = useState("");
   const [testYear, setTestYear] = useState("");
@@ -411,7 +414,7 @@ export default function Page() {
           setAccountEmail(savedDemoUser.email || "");
           setAccountPhone(savedDemoUser.phone || "");
           setAvatarUrl(readSaved(`pyq-demo-avatar:${savedDemoUser.id}`, ""));
-          setScreen(savedDemoUser.user_metadata?.full_name ? "Home" : "About You");
+          resetNavigation(savedDemoUser.user_metadata?.full_name ? "Home" : "About You");
           setAuthReady(true);
           loadUserData(savedDemoUser);
         }
@@ -427,15 +430,15 @@ export default function Page() {
       setAccountEmail(sessionUser?.email ?? "");
       setAccountPhone(sessionUser?.phone ?? "");
       if (sessionUser && new URLSearchParams(window.location.search).get("next") === "/admin") window.location.replace("/admin");
-      else if (sessionUser) setScreen(requestedScreen === "Reset Password" ? "Reset Password" : sessionUser.user_metadata?.full_name ? "Home" : "About You");
-      else setScreen(requestedScreen === "Auth" || requestedScreen === "Reset Password" ? requestedScreen : "Welcome");
+      else if (sessionUser) resetNavigation(requestedScreen === "Reset Password" ? "Reset Password" : sessionUser.user_metadata?.full_name ? "Home" : "About You");
+      else resetNavigation(requestedScreen === "Auth" || requestedScreen === "Reset Password" ? requestedScreen : "Welcome");
       setAuthReady(true);
       loadAvatar(sessionUser);
       loadUserData(sessionUser);
     }).catch(() => {
       if (!active || hasSavedDemoUser) return;
       setUser(null);
-      setScreen(requestedScreen === "Auth" || requestedScreen === "Reset Password" ? requestedScreen : "Welcome");
+      resetNavigation(requestedScreen === "Auth" || requestedScreen === "Reset Password" ? requestedScreen : "Welcome");
       setAuthReady(true);
     });
     const { data: authListener } = supabase.auth.onAuthStateChange((_event, session) => {
@@ -446,9 +449,9 @@ export default function Page() {
       if (nextUser) { setAuthEmail(nextUser.email ?? ""); setProfileName(nextUser.user_metadata?.full_name ?? ""); }
       setAccountEmail(nextUser?.email ?? "");
       if (nextUser?.phone) setAccountPhone(nextUser.phone);
-      if (_event === "PASSWORD_RECOVERY") setScreen("Reset Password");
-      else if (_event === "SIGNED_IN") setScreen(nextUser?.user_metadata?.full_name ? "Home" : "About You");
-      else if (_event === "SIGNED_OUT") setScreen("Welcome");
+      if (_event === "PASSWORD_RECOVERY") resetNavigation("Reset Password");
+      else if (_event === "SIGNED_IN") resetNavigation(nextUser?.user_metadata?.full_name ? "Home" : "About You");
+      else if (_event === "SIGNED_OUT") resetNavigation("Welcome");
       if (_event === "SIGNED_IN" || _event === "SIGNED_OUT") setAuthReady(true);
       window.setTimeout(() => loadUserData(nextUser), 0);
     });
@@ -596,7 +599,53 @@ export default function Page() {
     return () => window.clearTimeout(id);
   }, [toast]);
 
-  const go = (next) => { setScreen(next); setDrawer(false); setSelected(null); setEliminated([]); if (next === "Practice") setPracticeFinished(false); };
+  const resetNavigation = (next) => {
+    screenHistoryRef.current = [];
+    exitPromptTimeRef.current = 0;
+    screenRef.current = next;
+    setScreen(next);
+  };
+  const go = (next) => {
+    const current = screenRef.current;
+    if (next !== current) {
+      screenHistoryRef.current.push(current);
+      exitPromptTimeRef.current = 0;
+      window.history.pushState({ pyqScreen: next }, "", window.location.href);
+      screenRef.current = next;
+      setScreen(next);
+    }
+    setDrawer(false); setSelected(null); setEliminated([]); if (next === "Practice") setPracticeFinished(false);
+  };
+  useEffect(() => {
+    const handleBack = () => {
+      if (drawer || showMusicPicker || showQuestionPalette || showSubmitTest || showTestRules) {
+        setDrawer(false); setShowMusicPicker(false); setShowQuestionPalette(false); setShowSubmitTest(false); setShowTestRules(false);
+        window.history.pushState({ pyqScreen: screenRef.current }, "", window.location.href);
+        return;
+      }
+      const previousScreen = screenHistoryRef.current.pop();
+      if (previousScreen) {
+        screenRef.current = previousScreen;
+        setScreen(previousScreen);
+        setSelected(null); setEliminated([]);
+        return;
+      }
+      if (screenRef.current !== "Home") return;
+      const now = Date.now();
+      if (now - exitPromptTimeRef.current < 2000) {
+        exitPromptTimeRef.current = 0;
+        return;
+      }
+      exitPromptTimeRef.current = now;
+      setToast("Press back again to exit");
+      window.history.pushState({ pyqBackGuard: true }, "", window.location.href);
+    };
+    window.addEventListener("popstate", handleBack);
+    return () => window.removeEventListener("popstate", handleBack);
+  }, [drawer, showMusicPicker, showQuestionPalette, showSubmitTest, showTestRules]);
+  useEffect(() => {
+    window.history.pushState({ pyqBackGuard: true }, "", window.location.href);
+  }, []);
   const toggleMusic = async () => {
     const audio = document.getElementById("pyq-background-music");
     if (!audio || !musicSettings.enabled) return setToast("Background music is currently turned off.");
@@ -641,7 +690,7 @@ export default function Page() {
     const incorrect = answered - correct;
     const result = { subject, questions: testQuestions, answers: testAnswers, reviewFlags: testReviewFlags, answered, correct, incorrect, unanswered: testQuestions.length - answered, accuracy: answered ? Math.round(correct / answered * 100) : 0, score: Number((correct * 2 - incorrect * (2 / 3)).toFixed(2)), completedAt: new Date().toISOString() };
     setSubmittedTest(result); setTestHistory((history) => [result, ...history].slice(0, 5));
-    setShowSubmitTest(false); setShowQuestionPalette(false); setTimerRunning(false); setTestInProgress(false); setScreen("Test Results");
+    setShowSubmitTest(false); setShowQuestionPalette(false); setTimerRunning(false); setTestInProgress(false); go("Test Results");
   };
   useEffect(() => { if (testInProgress && seconds === 0) submitTest(); }, [testInProgress, seconds]);
   const nextQuestion = () => {
@@ -776,7 +825,7 @@ export default function Page() {
     if (result.error) return setAuthError(result.error.message);
     if (authMode === "signup" && !result.data.session) {
       setAuthNotice(`We sent a confirmation link to ${email}. Open it to activate your account, then come back here to sign in.`);
-      setScreen("Auth Confirmation");
+      go("Auth Confirmation");
       return;
     }
     setAuthEmail(email);
@@ -807,7 +856,7 @@ export default function Page() {
       if (error) throw error;
       setAuthEmail(email);
       setAuthNotice(`If an account exists for ${email}, we sent a password reset link.`);
-      setScreen("Reset Email Sent");
+      go("Reset Email Sent");
     } catch (error) { setAuthError(error.message || "Could not send a reset link. Check your connection and try again."); }
     finally { setAuthBusy(false); }
   };
@@ -1170,7 +1219,7 @@ export default function Page() {
       {screen === "About You" && <Content className="about-you-page" title="A little about you" subtitle="We’ll tailor your UPSC preparation to your goals." back={() => go("Welcome")} character><form className="about-you-form" onSubmit={saveAboutYou}><label className="about-name-field" htmlFor="about-name">Your name<span className="about-input-wrap"><img src={figmaAsset.profile} alt="" /><input id="about-name" value={profileName} onChange={(event) => setProfileName(event.target.value)} placeholder="Enter your name" maxLength={80} required /></span></label><fieldset><legend>How many attempts have you taken?</legend><div className="about-choice-row">{["0", "1", "2", "3+"].map((value) => <button type="button" key={value} className={aboutExamCount === value ? "selected" : ""} onClick={() => setAboutExamCount(value)}>{value}</button>)}</div></fieldset><label className="about-year-field">Target exam year<span className="about-input-wrap"><span aria-hidden="true">▣</span><select value={aboutTargetYear} onChange={(event) => setAboutTargetYear(event.target.value)}><option value="">Select your target year</option>{designYears.slice(0, 10).map((year) => <option key={year}>{year}</option>)}</select></span></label><div className="about-tip"><span>✦</span><p><b>Made for your preparation</b><small>Your selections help personalize your study recommendations and progress.</small></p></div><button className="primary-button full-button" type="submit">Start My Preparation</button></form></Content>}
       {screen === "Refer & Earn" && <Content className="referral-page" title="Refer & Earn" subtitle="Share the benefits. Earn more study time." back={() => go("My Profile")}><div className="referral-hero"><span className="referral-gift" aria-hidden="true">🎁</span><div className="referral-offers"><article><small>GIVE 20% OFF</small><b>Your friend<br /><em>20% off</em><br />their yearly plan</b></article><article><small>GET REWARDED</small><b>You receive<br /><em>1 month</em><br />per successful referral</b></article></div><p>Your reward applies after your friend subscribes.</p></div><div className="referral-code-card"><div><small>Your referral code</small><b>{referralCode}</b></div><button onClick={copyReferralCode}><span aria-hidden="true">▢</span> Copy</button></div><button className="primary-button full-button referral-share" onClick={shareReferral}><span aria-hidden="true">↗</span> Invite Friends Now</button><section className="referral-steps"><h2>How it works</h2>{[["↗", "Invite your friends", "Share your unique code via WhatsApp or any other platform."], ["♙", "Your friend subscribes", "They get 20% off on a yearly plan if eligible."], ["✦", "You get rewarded", "You receive 1 extra month for every successful referral."]].map(([symbol, title, body]) => <div key={title}><span>{symbol}</span><p><b>{title}</b><br />{body}</p></div>)}</section><div className="referral-results"><div><span>✧</span><small>Successful Referrals</small><b>0</b></div><i /><div><span>♛</span><small>Months Earned</small><b>0</b></div></div></Content>}
       {screen === "Account Settings" && <Content className="account-settings-page" title="Account Settings" subtitle="Your information and security" back={() => go("My Profile")} character><form onSubmit={saveAccountSettings}><h2 className="account-section-label">PERSONAL INFORMATION</h2><div className="account-info-card"><label><span>♙</span><small>Name<input disabled={!accountEditing} value={profileName} onChange={(event) => setProfileName(event.target.value)} /></small><button type="button" aria-label="Edit name" onClick={() => setAccountEditing(true)}>✎</button></label><label><span>✉</span><small>Email<input disabled={!accountEditing} type="email" value={accountEmail} onChange={(event) => setAccountEmail(event.target.value)} placeholder={user?.phone && !user?.email ? "Add an email address" : ""} /></small><button type="button" aria-label="Edit email" onClick={() => setAccountEditing(true)}>✎</button></label><label><span>♧</span><small>Phone<input disabled={!accountEditing} type="tel" value={accountPhone} onChange={(event) => setAccountPhone(event.target.value)} placeholder="Add a phone number" /></small><button type="button" aria-label="Edit phone number" onClick={() => setAccountEditing(true)}>✎</button></label></div>{accountEditing && <button className="primary-button full-button" type="submit">Save changes</button>}</form><h2 className="account-section-label">ACCOUNT ACTIONS</h2><div className="account-action-card"><button onClick={async () => { if (user?.is_demo) { localStorage.removeItem(DEMO_USER_KEY); setUser(null); go("Welcome"); return; } const { error } = await supabase.auth.signOut(); if (error) return setToast(error.message); go("Welcome"); }}><span>⇥</span><b>Sign out</b><i>›</i></button><button onClick={() => setToast("Privacy and security settings will be available here.")}><span>♢</span><b>Privacy and security</b><i>›</i></button></div><h2 className="account-section-label danger-label">DANGER ZONE</h2><button className="delete-account-card" onClick={() => setToast("Contact support to request account deletion.")}><span>♜</span><span><b>Delete account</b><small>Permanently remove your account and data</small></span><i>›</i></button></Content>}
-      {screen === "My Profile" && <Content className="profile-page" title="My Profile" subtitle="Manage Profile" back={() => go("Home")}><div className="profile-card">{avatarUrl ? <img className="profile-photo" src={avatarUrl} alt={`${displayName || "Your"} profile photo`} /> : <span className="profile-photo profile-photo-placeholder" aria-hidden="true"><img src={figmaAsset.profile} alt="" /></span>}<h2>{displayName || "Enter your name"}</h2><p>{user?.email || user?.phone || "Email not added"}</p>{user?.phone && !user?.email && <button type="button" className="profile-email-action" onClick={() => { setAccountEmail(""); setAccountPhone(user.phone); setAccountEditing(true); go("Account Settings"); }}>Add email address</button>}<small className="member-since">{user?.created_at ? `Member since ${new Date(user.created_at).toLocaleDateString("en-IN", { month: "short", year: "numeric" })}` : ""}</small>{user ? <><button type="button" className="outline-button avatar-upload-button" onClick={() => avatarInputRef.current?.click()} disabled={avatarBusy}>{avatarBusy ? "Uploading photo…" : "Change profile photo"}</button><input ref={avatarInputRef} className="avatar-file-input" type="file" accept="image/jpeg,image/png,image/webp,image/gif" onChange={uploadAvatar} disabled={avatarBusy} aria-label="Choose a profile photo" /><button className="outline-button" onClick={() => setEditingProfile((value) => !value)}>{editingProfile ? "Cancel" : "Edit profile"}</button></> : <button className="outline-button" onClick={() => go("Welcome")}>Sign in to change photo</button>}{editingProfile && <form className="auth-form" onSubmit={saveProfile}><label htmlFor="profile-name">Full name</label><input id="profile-name" value={profileName} onChange={(event) => setProfileName(event.target.value)} maxLength={80} required /><button className="primary-button full-button" type="submit">Save profile <span>→</span></button></form>}</div><div className="profile-row"><span>✉</span><div><small>{user?.email ? "EMAIL" : user?.phone ? "PHONE" : "CONTACT"}</small><b>{user?.email || user?.phone || (user ? "Email not added" : "Not signed in")}</b></div>{user && <span>✓</span>}</div><div className="profile-row"><span>◷</span><div><small>MEMBERSHIP</small><b>Free account</b></div><button className="text-action" onClick={() => go("Subscription")}>View plans</button></div><div className="section-heading"><h3>Account Settings</h3></div>{[["♙", "Account Settings", "Manage your personal information"], ["♧", "Refer & Earn", "Invite your friends and earn rewards"], ["▣", "Terms & Policy", "Read our terms and privacy policy"], ["?", "Help & Support", "Get help and contact support"]].map(([glyph, item, subtitle]) => <button className="choice-row" key={item} onClick={() => item === "Account Settings" || item === "Refer & Earn" ? go(item) : setToast(`${item} will be available here.`)}><span className="profile-setting-icon">{glyph}</span><span><b>{item}</b><small>{subtitle}</small></span><span className="chevron">›</span></button>)}{user ? <button className="quiet-link" onClick={async () => { if (user.is_demo) { localStorage.removeItem(DEMO_USER_KEY); setUser(null); setProfileName(""); setAccountEmail(""); go("Welcome"); return; } const { error } = await supabase.auth.signOut(); if (error) return setToast(error.message); setToast("You’ve signed out"); }}>Sign out</button> : <button className="quiet-link" onClick={() => go("Welcome")}>Sign in or create account</button>}</Content>}
+      {screen === "My Profile" && <Content className="profile-page" title="My Profile" subtitle="Manage Profile" back={() => go("Home")}><div className="profile-card">{avatarUrl ? <img className="profile-photo" src={avatarUrl} alt={`${displayName || "Your"} profile photo`} /> : <span className="profile-photo profile-photo-placeholder" aria-hidden="true"><img src={figmaAsset.profile} alt="" /></span>}<h2>{displayName || "Enter your name"}</h2><p>{user?.email || user?.phone || "Email not added"}</p>{user?.phone && !user?.email && <button type="button" className="profile-email-action" onClick={() => { setAccountEmail(""); setAccountPhone(user.phone); setAccountEditing(true); go("Account Settings"); }}>Add email address</button>}<small className="member-since">{user?.created_at ? `Member since ${new Date(user.created_at).toLocaleDateString("en-IN", { month: "short", year: "numeric" })}` : ""}</small>{user ? <><button type="button" className="outline-button avatar-upload-button" onClick={() => avatarInputRef.current?.click()} disabled={avatarBusy}>{avatarBusy ? "Uploading photo…" : "Change profile photo"}</button><input ref={avatarInputRef} className="avatar-file-input" type="file" accept="image/jpeg,image/png,image/webp,image/gif" onChange={uploadAvatar} disabled={avatarBusy} aria-label="Choose a profile photo" /><button className="outline-button" onClick={() => setEditingProfile((value) => !value)}>{editingProfile ? "Cancel" : "Edit profile"}</button></> : <button className="outline-button" onClick={() => go("Welcome")}>Sign in to change photo</button>}{editingProfile && <form className="auth-form" onSubmit={saveProfile}><label htmlFor="profile-name">Full name</label><input id="profile-name" value={profileName} onChange={(event) => setProfileName(event.target.value)} maxLength={80} required /><button className="primary-button full-button" type="submit">Save profile <span>→</span></button></form>}</div><div className="profile-row"><span>✉</span><div><small>{user?.email ? "EMAIL" : user?.phone ? "PHONE" : "CONTACT"}</small><b>{user?.email || user?.phone || (user ? "Email not added" : "Not signed in")}</b></div>{user && <span>✓</span>}</div><div className="profile-row"><span>◷</span><div><small>MEMBERSHIP</small><b>Free account</b></div><button className="text-action" onClick={() => go("Subscription")}>View plans</button></div><div className="section-heading"><h3>Account Settings</h3></div>{[["♙", "Account Settings", "Manage your personal information"], ["♧", "Refer & Earn", "Invite your friends and earn rewards"], ["▣", "Terms & Policy", "Read our terms and privacy policy"], ["?", "Help & Support", "Get help and contact support"]].map(([glyph, item, subtitle]) => <button className="choice-row" key={item} onClick={() => item === "Account Settings" || item === "Refer & Earn" ? go(item) : setToast(`${item} will be available here.`)}><span className="profile-setting-icon">{glyph}</span><span><b>{item}</b><small>{subtitle}</small></span><span className="chevron">›</span></button>)}{user ? <button className="quiet-link" onClick={async () => { if (user.is_demo) { localStorage.removeItem(DEMO_USER_KEY); setUser(null); setProfileName(""); setAccountEmail(""); resetNavigation("Welcome"); return; } const { error } = await supabase.auth.signOut(); if (error) return setToast(error.message); setToast("You’ve signed out"); }}>Sign out</button> : <button className="quiet-link" onClick={() => go("Welcome")}>Sign in or create account</button>}</Content>}
 
       {screen === "Auth" && <Content title={authMode === "signup" ? "Create your account" : "Welcome to PYQ Cloud"} subtitle={authMode === "signup" ? "Sign up to save your progress and study data." : "Sign in to keep your learning in sync."} back={() => go("Welcome")}><div className="auth-card"><div className="auth-symbol">☁</div><h2>{authMode === "signup" ? "Start your preparation." : "Make every session count."}</h2><p>{authMode === "signup" ? "Create an account to keep your learning in sync." : "Save your progress and pick up wherever you left off."}</p>{authError && <p className="auth-feedback error" role="alert">{authError}</p>}{authNotice && <p className="auth-feedback" role="status">{authNotice}</p>}<form className="auth-form" onSubmit={submitAuth}><label htmlFor="email">Email address</label><input id="email" name="email" type="email" autoComplete="email" value={authEmail} onChange={(event) => setAuthEmail(event.target.value)} placeholder="you@example.com" required /><label htmlFor="password">Password</label><input id="password" name="password" type="password" autoComplete={authMode === "signup" ? "new-password" : "current-password"} minLength="8" placeholder="At least 8 characters" required />{authMode === "signup" && <><label htmlFor="confirm-password">Confirm password</label><input id="confirm-password" name="confirmPassword" type="password" autoComplete="new-password" minLength="8" placeholder="Enter your password again" required /></>}<button className="primary-button full-button" type="submit" disabled={authBusy}>{authBusy ? "Please wait…" : authMode === "signup" ? "Create account" : "Sign in"} <span>→</span></button></form>{authMode === "signin" && <button className="auth-inline-link" onClick={() => { setAuthError(""); setAuthNotice(""); go("Reset Password"); }}>Forgot password?</button>}<button className="quiet-link" onClick={() => { setAuthMode((value) => value === "signup" ? "signin" : "signup"); setAuthError(""); setAuthNotice(""); }}>{authMode === "signup" ? "Already have an account? Sign in" : "New here? Create an account"}</button><small className="auth-note">Your account and study data sync securely through Supabase.</small></div></Content>}
       {screen === "Auth Confirmation" && <Content title="Check your email" subtitle="One quick step to activate your account." back={() => go("Auth")}><div className="auth-card"><div className="auth-symbol">✉</div><h2>Confirm your email</h2><p className="auth-feedback" role="status">{authNotice || `We sent a confirmation link to ${authEmail}. Open it to activate your account, then come back here to sign in.`}</p>{authError && <p className="auth-feedback error" role="alert">{authError}</p>}<button className="primary-button full-button" onClick={() => { setAuthMode("signin"); setAuthError(""); setAuthNotice(""); go("Auth"); }}>Continue to sign in <span>→</span></button><button className="quiet-link" onClick={resendSignupConfirmation} disabled={authBusy}>{authBusy ? "Sending…" : "Resend confirmation email"}</button></div></Content>}

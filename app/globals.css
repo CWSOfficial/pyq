@@ -2053,3 +2053,8 @@ html, body { font-family: Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", 
 .mistake-summary strong,
 .test-score-card strong { font-size: var(--font-display) !important; }
 
+/* Keep every navigation icon in sync with the active tab colour. */
+.bottom-nav button { color: var(--text); }
+.bottom-nav button.active { color: var(--purple); }
+.bottom-nav button .nav-icon { width: 22px; height: 22px; background-color: currentColor; -webkit-mask: var(--nav-icon) center / contain no-repeat; mask: var(--nav-icon) center / contain no-repeat; }
+

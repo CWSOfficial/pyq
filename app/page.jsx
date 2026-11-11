@@ -85,6 +85,8 @@ function readSaved(key, fallback) {
   try { const value = window.localStorage.getItem(key); return value ? JSON.parse(value) : fallback; } catch { return fallback; }
 }
 
+function notePlainText(value) { return String(value || "").trim(); }
+
 function localDateKey(date = new Date()) {
   return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
 }
@@ -199,6 +201,7 @@ export default function Page() {
   const [musicSettings, setMusicSettings] = useState({ enabled: false, trackUrl: "", volume: 0.35 });
   const [musicPlaying, setMusicPlaying] = useState(false);
   const [showMusicPicker, setShowMusicPicker] = useState(false);
+  const [showMusicControls, setShowMusicControls] = useState(false);
   const [authEmail, setAuthEmail] = useState(AUTH_DEMO_MODE ? "pyqcloud@gmail.com" : "");
   const [phoneNumber, setPhoneNumber] = useState("");
   const [phoneCode, setPhoneCode] = useState("");
@@ -226,9 +229,11 @@ export default function Page() {
   const [practiceCatalog, setPracticeCatalog] = useState(null);
   const [attemptHistory, setAttemptHistory] = useState([]);
   const [questionIndex, setQuestionIndex] = useState(0);
+  const [practiceElapsedSeconds, setPracticeElapsedSeconds] = useState(0);
   const [reviewQuestionPrompt, setReviewQuestionPrompt] = useState("");
   const [practiceFinished, setPracticeFinished] = useState(false);
   const [selected, setSelected] = useState(null);
+  const [answerChecked, setAnswerChecked] = useState(false);
   const [eliminated, setEliminated] = useState([]);
   const [bookmarks, setBookmarks] = useState([]);
   const [mistakes, setMistakes] = useState([]);
@@ -241,6 +246,10 @@ export default function Page() {
   const [notes, setNotes] = useState([]);
   const [noteDraft, setNoteDraft] = useState("");
   const [editingNote, setEditingNote] = useState(false);
+  const [editingNoteId, setEditingNoteId] = useState(null);
+  const [noteMenuId, setNoteMenuId] = useState(null);
+  const [draggedNoteId, setDraggedNoteId] = useState(null);
+  const noteDragRef = useRef(null);
   const [habits, setHabits] = useState([]);
   const [habitLogs, setHabitLogs] = useState([]);
   const [habitBusy, setHabitBusy] = useState(false);
@@ -261,7 +270,6 @@ export default function Page() {
   const [meditationMinutes, setMeditationMinutes] = useState(10);
   const [meditationSeconds, setMeditationSeconds] = useState(10 * 60);
   const [meditationRunning, setMeditationRunning] = useState(false);
-  const [meditationSound, setMeditationSound] = useState(true);
   const [mode, setMode] = useState("Pomodoro");
   const [subject, setSubject] = useState("Polity");
   const [toast, setToast] = useState("");
@@ -269,6 +277,7 @@ export default function Page() {
   const [showStreakDetails, setShowStreakDetails] = useState(false);
   const savedName = String(profileName || user?.user_metadata?.full_name || "").trim();
   const displayName = user?.is_demo && savedName.toLowerCase() === "pyq cloud" ? "" : savedName;
+  const firstName = displayName.trim().split(/\s+/)[0] || "";
   const availableSubjects = [...new Set(questions.map((item) => item.subject).filter(Boolean))].sort((a, b) => a.localeCompare(b));
   const availableYears = practiceCatalog?.years || [...new Set([...designYears, ...questions.map((item) => String(item.year)).filter(Boolean)])].sort((a, b) => Number(b) - Number(a));
   const habitDateKey = localDateKey(habitDate);
@@ -283,7 +292,7 @@ export default function Page() {
   const reviewQuestion = reviewQuestionPrompt ? questions.find((item) => item.prompt === reviewQuestionPrompt) : null;
   const questionList = testInProgress && testQuestions.length ? testQuestions : reviewQuestion ? [reviewQuestion] : subject === "Mixed Practice" ? randomPool.slice(0, randomCount) : topicQuestions.slice(0, topicQuestionCount);
   const question = questionList[questionIndex % Math.max(questionList.length, 1)] ?? questions[0];
-  const displaySelected = testInProgress ? (testAnswers[questionIndex] ?? null) : selected;
+  const displaySelected = testInProgress ? (testAnswers[questionIndex] ?? null) : answerChecked ? selected : null;
   const practiceScope = selectedTopics.length === 1 ? selectedTopics[0] : /^\d{4}$/.test(subject) ? `${subject} paper` : subject;
   const savedQuestions = bookmarks.map((prompt) => questions.find((item) => item.prompt === prompt)).filter(Boolean);
   const rawSubjectOptions = practiceCatalog?.subjects || [...practiceSubjectCatalog, ...availableSubjects];
@@ -344,7 +353,12 @@ export default function Page() {
     ]);
     if (saved) setBookmarks(saved.map((item) => item.questions?.prompt).filter(Boolean));
     if (habitRows) { const done = new Set((habitLogs ?? []).filter((item) => item.completed).map((item) => item.habit_id)); setHabits(habitRows.map((item) => ({ ...item, done: done.has(item.id) }))); }
-    if (savedNotes) setNotes(savedNotes.map((item) => ({ id: item.id, text: item.content, date: new Date(item.created_at).toLocaleDateString("en-IN", { day: "numeric", month: "short" }) })));
+    if (savedNotes) {
+      const order = readSaved(`pyq-note-order:${activeUser.id}`, []);
+      const mapped = savedNotes.map((item) => ({ id: item.id, text: item.content, date: new Date(item.created_at).toLocaleDateString("en-IN", { day: "numeric", month: "short" }) }));
+      if (order.length) mapped.sort((left, right) => { const leftRank = order.indexOf(left.id); const rightRank = order.indexOf(right.id); return (leftRank < 0 ? -1 : leftRank) - (rightRank < 0 ? -1 : rightRank); });
+      setNotes(mapped);
+    }
     if (attempts) {
       setAttemptHistory(attempts);
       setAnalytics(summarizeAttempts(attempts));
@@ -577,6 +591,12 @@ export default function Page() {
     return () => window.clearInterval(id);
   }, [timerRunning, mode]);
   useEffect(() => {
+    if (screen !== "Practice" || testInProgress) return undefined;
+    setPracticeElapsedSeconds(0);
+    const id = window.setInterval(() => setPracticeElapsedSeconds((value) => value + 1), 1000);
+    return () => window.clearInterval(id);
+  }, [screen, testInProgress, questionIndex]);
+  useEffect(() => {
     const savedFocusMinutes = Number(readSaved("pyq-focus-duration-minutes", 25));
     if (Number.isInteger(savedFocusMinutes) && savedFocusMinutes >= 1 && savedFocusMinutes <= 999) { setFocusMinutes(savedFocusMinutes); setTimerMinutes(savedFocusMinutes); setSeconds(savedFocusMinutes * 60); }
   }, []);
@@ -614,7 +634,7 @@ export default function Page() {
       screenRef.current = next;
       setScreen(next);
     }
-    setDrawer(false); setSelected(null); setEliminated([]); if (next === "Practice") setPracticeFinished(false);
+    setDrawer(false); setSelected(null); setAnswerChecked(false); setEliminated([]); if (next === "Practice") setPracticeFinished(false);
   };
   useEffect(() => {
     const handleBack = () => {
@@ -627,7 +647,7 @@ export default function Page() {
       if (previousScreen) {
         screenRef.current = previousScreen;
         setScreen(previousScreen);
-        setSelected(null); setEliminated([]);
+        setSelected(null); setAnswerChecked(false); setEliminated([]);
         return;
       }
       if (screenRef.current !== "Home") return;
@@ -659,10 +679,7 @@ export default function Page() {
     setMusicSettings((settings) => ({ ...settings, trackUrl: track.url, enabled: true }));
     setMusicPlaying(false); setShowMusicPicker(false); setToast(`${track.label} selected. Tap Focus music to play.`);
   };
-  const chooseAnswer = (index) => {
-    if (testInProgress) { setTestAnswers((answers) => ({ ...answers, [questionIndex]: index })); return; }
-    if (selected !== null) return;
-    setSelected(index);
+  const recordPracticeAnswer = (index) => {
     if (!user || user.is_demo) {
       setAttemptHistory((value) => [...value, { question_id: question.id, subject: question.subject, is_correct: index === question.answer, attempted_at: new Date().toISOString() }]);
     }
@@ -674,12 +691,31 @@ export default function Page() {
       });
     }
   };
+  const chooseAnswer = (index) => {
+    if (eliminated.includes(index)) return;
+    if (testInProgress) { setTestAnswers((answers) => ({ ...answers, [questionIndex]: index })); return; }
+    if (answerChecked) return;
+    setSelected(index);
+  };
+  const checkPracticeAnswer = () => {
+    if (selected === null || answerChecked) return;
+    setAnswerChecked(true);
+    recordPracticeAnswer(selected);
+  };
+  const eliminateOption = (index) => {
+    if (eliminated.includes(index)) return;
+    if (question.options.length - eliminated.length <= 1) {
+      window.alert("At least one option must remain.");
+      return;
+    }
+    setEliminated((value) => [...value, index]);
+  };
   const startConfiguredTest = (scope, count, duration) => {
     const pool = questions.filter((item) => canonicalSubject(item.subject).toLowerCase() === canonicalSubject(scope).toLowerCase() || String(item.year) === scope);
     if (!pool.length) { setToast(`No questions are available for ${scope} yet`); return; }
     const selectedQuestions = pool.slice(0, count);
     setSubject(scope); setTestQuestions(selectedQuestions); setTestAnswers({}); setTestReviewFlags([]);
-    setSubmittedTest(null); setQuestionIndex(0); setSelected(null); setEliminated([]);
+    setSubmittedTest(null); setQuestionIndex(0); setSelected(null); setAnswerChecked(false); setEliminated([]);
     setPracticeFinished(false); setTestInProgress(true); setShowQuestionPalette(false); setShowSubmitTest(false);
     setMode("Countdown"); setSeconds(duration); setTimerRunning(true); go("Practice");
   };
@@ -698,8 +734,8 @@ export default function Page() {
       if (questionIndex + 1 >= questionList.length) { setShowSubmitTest(true); return; }
       setQuestionIndex((value) => value + 1); setEliminated([]); return;
     }
-    if (questionIndex + 1 >= questionList.length) { setPracticeFinished(true); setTimerRunning(false); setTestInProgress(false); setSelected(null); setEliminated([]); return; }
-    setQuestionIndex((value) => value + 1); setSelected(null); setEliminated([]);
+    if (questionIndex + 1 >= questionList.length) { setPracticeFinished(true); setTimerRunning(false); setTestInProgress(false); setSelected(null); setAnswerChecked(false); setEliminated([]); return; }
+    setQuestionIndex((value) => value + 1); setSelected(null); setAnswerChecked(false); setEliminated([]);
   };
   const openHabitForm = (habit = null) => {
     setEditingHabit(habit);
@@ -761,22 +797,101 @@ export default function Page() {
     setHabitBusy(false);
     if (result.error) { setHabits((items) => items.map((item) => item.id === habit.id ? { ...item, done: previous } : item)); setToast("Could not sync habit update"); }
   };
-  const saveNote = () => {
-    if (!noteDraft.trim()) return;
+  const openNoteEditor = (note = null) => {
+    setNoteDraft(note?.text || "");
+    setEditingNoteId(note?.id ?? null);
+    setNoteMenuId(null);
+    setEditingNote(true);
+  };
+  const saveNoteOrder = (items) => {
+    try { window.localStorage.setItem(`pyq-note-order:${user && !user.is_demo ? user.id : "local"}`, JSON.stringify(items.map((item) => item.id))); } catch {}
+  };
+  const moveNote = (sourceId, targetId) => {
+    if (sourceId === targetId) return;
+    setNotes((items) => {
+      const from = items.findIndex((item) => String(item.id) === String(sourceId));
+      const to = items.findIndex((item) => String(item.id) === String(targetId));
+      if (from < 0 || to < 0 || from === to) return items;
+      const next = [...items];
+      const [moved] = next.splice(from, 1);
+      next.splice(to, 0, moved);
+      saveNoteOrder(next);
+      return next;
+    });
+  };
+  const startNoteDrag = (event, noteId) => {
+    if (event.pointerType === "mouse" || event.button !== 0) return;
+    event.preventDefault();
+    event.stopPropagation();
+    event.currentTarget.setPointerCapture(event.pointerId);
+    noteDragRef.current = { id: noteId, pointerId: event.pointerId, startX: event.clientX, startY: event.clientY, moved: false };
+    setDraggedNoteId(noteId);
+  };
+  const moveNoteDrag = (event) => {
+    const drag = noteDragRef.current;
+    if (!drag || drag.pointerId !== event.pointerId) return;
+    if (!drag.moved && Math.hypot(event.clientX - drag.startX, event.clientY - drag.startY) < 6) return;
+    drag.moved = true;
+    const target = document.elementFromPoint(event.clientX, event.clientY)?.closest("[data-note-id]");
+    const targetId = target?.getAttribute("data-note-id");
+    if (targetId !== null && targetId !== undefined) moveNote(drag.id, targetId);
+  };
+  const endNoteDrag = (event) => {
+    if (!noteDragRef.current || noteDragRef.current.pointerId !== event.pointerId) return;
+    noteDragRef.current = null;
+    setDraggedNoteId(null);
+  };
+  const finishNativeNoteDrag = () => { noteDragRef.current = null; setDraggedNoteId(null); };
+  const closeNoteEditor = () => {
+    setEditingNote(false);
+    setEditingNoteId(null);
+    setNoteDraft("");
+  };
+  useEffect(() => {
+    if (!editingNote) return;
+    const closeOnEscape = (event) => { if (event.key === "Escape") closeNoteEditor(); };
+    window.addEventListener("keydown", closeOnEscape);
+    return () => window.removeEventListener("keydown", closeOnEscape);
+  }, [editingNote]);
+  useEffect(() => { setShowMusicControls(false); setShowMusicPicker(false); }, [screen]);
+  const saveNote = async () => {
+    const content = noteDraft.trim();
+    if (!content) return;
+    if (editingNoteId !== null) {
+      if (user && !user.is_demo) {
+        const { error } = await supabase.from("notes").update({ content }).eq("id", editingNoteId).eq("user_id", user.id);
+        if (error) return setToast("Could not update note. Please try again.");
+      }
+      setNotes((value) => value.map((item) => item.id === editingNoteId ? { ...item, text: content } : item));
+      closeNoteEditor();
+      setToast("Note updated");
+      return;
+    }
     if (user && !user.is_demo) {
-      supabase.from("notes").insert({ user_id: user.id, content: noteDraft.trim() }).select("id, content, created_at").single().then(({ data, error }) => {
+      supabase.from("notes").insert({ user_id: user.id, content }).select("id, content, created_at").single().then(({ data, error }) => {
         if (error) return setToast("Could not save note. Please try again.");
         setNotes((value) => [{ id: data.id, text: data.content, date: new Date(data.created_at).toLocaleDateString("en-IN", { day: "numeric", month: "short" }) }, ...value]);
-        setNoteDraft("");
-        setEditingNote(false);
+        closeNoteEditor();
         setToast("Note synced to your account");
       });
       return;
     }
-    setNotes((value) => [{ id: Date.now(), text: noteDraft.trim(), date: new Date().toLocaleDateString("en-IN", { day: "numeric", month: "short" }) }, ...value]);
-    setNoteDraft(""); setEditingNote(false); setToast("Note saved");
+    setNotes((value) => [{ id: Date.now(), text: content, date: new Date().toLocaleDateString("en-IN", { day: "numeric", month: "short" }) }, ...value]);
+    closeNoteEditor();
+    setToast("Note saved");
   };
-  const startPractice = (name) => { setReviewQuestionPrompt(""); setQuestionIndex(0); setSubject(name); setPracticeFinished(false); setSelected(null); setEliminated([]); go("Practice"); };
+  const deleteNote = async (note) => {
+    const title = notePlainText(note.text).split("\n")[0].slice(0, 42) || "this note";
+    if (!window.confirm(`Delete “${title}”?`)) { setNoteMenuId(null); return; }
+    if (user && !user.is_demo) {
+      const { error } = await supabase.from("notes").delete().eq("id", note.id).eq("user_id", user.id);
+      if (error) { setNoteMenuId(null); return setToast("Could not delete note"); }
+    }
+    setNotes((value) => value.filter((item) => item.id !== note.id));
+    setNoteMenuId(null);
+    setToast("Note deleted");
+  };
+  const startPractice = (name) => { setReviewQuestionPrompt(""); setQuestionIndex(0); setSubject(name); setPracticeFinished(false); setSelected(null); setAnswerChecked(false); setEliminated([]); go("Practice"); };
   const toggleBookmark = async () => {
     const saved = bookmarks.includes(question.prompt);
     setBookmarks((value) => saved ? value.filter((item) => item !== question.prompt) : [question.prompt, ...value]);
@@ -1093,7 +1208,7 @@ export default function Page() {
 
   return <main className="app-shell">
     <audio id="pyq-background-music" src={musicSettings.trackUrl || "/audio/pyq-focus.wav"} loop preload="none" onEnded={() => setMusicPlaying(false)} />
-    {musicSettings.enabled && <div className="music-player-controls"><button className="music-track-button" aria-label="Choose a music track" aria-expanded={showMusicPicker} onClick={() => setShowMusicPicker((visible) => !visible)}>♫</button><button className={`music-toggle ${musicPlaying ? "playing" : ""}`} aria-label={musicPlaying ? "Pause background music" : "Play background music"} onClick={toggleMusic}><span>{musicPlaying ? "Ⅱ" : "♫"}</span><small>{musicPlaying ? "Music on" : "Focus music"}</small></button>{showMusicPicker && <div className="music-track-menu" role="menu" aria-label="Music tracks">{builtInMusicTracks.map((track) => <button role="menuitem" className={musicSettings.trackUrl === track.url ? "selected" : ""} key={track.url} onClick={() => chooseMusicTrack(track)}><span>♫</span>{track.label}<small>{musicSettings.trackUrl === track.url ? "Selected" : "Play this track"}</small></button>)}</div>}</div>}
+    {screen === "Meditation" && musicSettings.enabled && showMusicControls && <div className="music-player-controls meditation-music-controls"><button className="music-track-button" aria-label="Choose a music track" aria-expanded={showMusicPicker} onClick={() => setShowMusicPicker((visible) => !visible)}>♫</button><button className={`music-toggle ${musicPlaying ? "playing" : ""}`} aria-label={musicPlaying ? "Pause background music" : "Play background music"} onClick={toggleMusic}><span>{musicPlaying ? "Ⅱ" : "♫"}</span><small>{musicPlaying ? "Music on" : "Focus music"}</small></button>{showMusicPicker && <div className="music-track-menu" role="menu" aria-label="Music tracks">{builtInMusicTracks.map((track) => <button role="menuitem" className={musicSettings.trackUrl === track.url ? "selected" : ""} key={track.url} onClick={() => chooseMusicTrack(track)}><span>♫</span>{track.label}<small>{musicSettings.trackUrl === track.url ? "Selected" : "Play this track"}</small></button>)}</div>}</div>}
     <div className="phone-screen">
       <aside className="desktop-sidebar" aria-label="Main menu">
         <div className="desktop-brand"><span className="desktop-brand-mark"><img src="/brand/cloud-ai-logo.png" alt="" /></span><span><b>Cloud.ai</b><small>Keep learning. Keep growing.</small></span></div>
@@ -1127,7 +1242,7 @@ export default function Page() {
       </header>}
 
       {screen === "Home" && <section className="home-page">
-        <div className="greeting-row"><div><p className="eyebrow">{timeGreeting}{displayName ? <>, <b>{displayName} 👋</b></> : ""}</p><h1>PYQs (2013-2026) are<br />ready for you.</h1></div><div className="cloud-mascot" role="img" aria-label="PYQ Cloud animated mascot"><Lottie className="home-mascot-animation" src="/mascot-lottie/cloudy-idle.json?v=figma-home-20261028" autoplay loop /><img className="mascot-star" src="/figma-assets/s2-b34d8.png" alt="" /></div></div>
+        <div className="greeting-row"><div><p className="eyebrow">{timeGreeting}{firstName ? <>, <b>{firstName} 👋</b></> : ""}</p><h1>PYQs (2013-2026) are<br />ready for you.</h1></div><div className="cloud-mascot" role="img" aria-label="PYQ Cloud animated mascot"><Lottie className="home-mascot-animation" src="/mascot-lottie/cloudy-idle.json?v=figma-home-20261028" autoplay loop /></div></div>
         <div className="practice-grid">
           <ActionCard title="Practice by Subject" body="Choose a subject and practice PYQs" asset={figmaAsset.subject} tone="violet" onClick={() => go("Practice by Subject")} />
           <ActionCard title="Practice by Year" body="Select a year and practice PYQs" asset={figmaAsset.year} tone="teal" onClick={() => go("Practice by Year")} />
@@ -1136,9 +1251,9 @@ export default function Page() {
         </div>
         <aside className="home-note-card" aria-label="A note for you">
           <span className="home-note-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none"><path d="M9 18h6m-5 3h4m-2-20a7 7 0 0 0-4.7 12.2c.9.8 1.4 1.5 1.6 2.8h6.2c.2-1.3.7-2 1.6-2.8A7 7 0 0 0 12 1Z" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" /></svg></span>
-          <span className="home-note-copy"><strong className="home-note-title">A note for you{displayName ? <>, <em>{displayName}</em></> : ""}</strong><small>Today is a new day!</small><small className="home-note-message">Every question that you practice brings you one step closer to your dream.</small></span>
+          <span className="home-note-copy"><strong className="home-note-title">A note for you{firstName ? <>, <em>{firstName}</em></> : ""}</strong><small>Today is a new day!</small><small className="home-note-message">Every question that you practice brings you one step closer to your dream.</small></span>
         </aside>
-        <button className="goal-card" onClick={() => go("Analytics & Streak")}>
+        <button className="goal-card" onClick={(event) => go(event.target.closest(".goal-stats > span:first-child") ? "Streaks with Cloudy" : "Analytics & Streak")}>
           <div className="goal-title"><span className="goal-icon"><img src={figmaAsset.goal} alt="" /></span><span>Daily Goal</span><b>{Math.min(analytics.today, 20)}/20 <small>Questions</small></b><span className="progress-ring"><strong>{Math.min(100, Math.round(analytics.today / 20 * 100))}%</strong></span></div>
           <div className="goal-stats"><span><b className="hot"><img src={figmaAsset.streak} alt="" /> {analytics.streak}</b><small>Day Streak</small></span><span><b className="mint"><img src={figmaAsset.solved} alt="" /> {completedQuestionCount.toLocaleString()}</b><small>Questions Solved</small></span><span><b className="rose"><img src={figmaAsset.accuracy} alt="" /> {analytics.correct}%</b><small>Accuracy</small></span></div>
         </button>
@@ -1154,7 +1269,36 @@ export default function Page() {
 
       {screen === "Practice" && !questionList.length && <Content title={`${subject} Practice`} subtitle="Questions are being added" back={() => go("Home")}><Empty icon="▤" title="No questions in this set yet" text="Try another subject or year. The PYQ Cloud question bank will appear here as the client content is loaded." /></Content>}
       {screen === "Practice" && practiceFinished && <Content title="Practice set complete" subtitle="You have reached the end of this set." back={() => go("Home")}><div className="question-card practice-complete-card"><h2>Practice complete</h2><p>{questionList.length} {questionList.length === 1 ? "question was" : "questions were"} in this set. {question.isDemo ? "This was a demo question; the complete question bank has not been loaded here yet." : "Choose another set to continue practicing."}</p></div><button className="primary-button full-button" onClick={() => go("Practice by Subject")}>Choose another practice set <span>→</span></button></Content>}
-      {screen === "Practice" && !practiceFinished && questionList.length > 0 && <Content title={testInProgress ? "Test Mode" : subject === "Mixed Practice" ? "Random Practice" : `${subject} Practice`} subtitle={`Question ${questionIndex + 1} of ${questionList.length} in ${practiceScope} · Exam year ${question.year}${testInProgress ? ` · ${formatTime(seconds)} left` : ""}`} back={() => { setTimerRunning(false); setTestInProgress(false); go("Home"); }}><div className="question-toolbar"><span className="question-tag">{question.subject} · {question.tag}</span><div>{testInProgress && <button className="mini-icon" aria-label="Open question palette" onClick={() => setShowQuestionPalette(true)}>▦</button>}<button className={`mini-icon ${bookmarks.includes(question.prompt) ? "active" : ""}`} aria-label="Bookmark" onClick={toggleBookmark}>♧</button><button className="mini-icon" aria-label="Copy question" onClick={async () => { await navigator.clipboard?.writeText(question.prompt); setToast("Question copied"); }}>▢</button></div></div>{question.isDemo && <div className="question-bank-notice" role="status">Demo question: the complete question bank has not been loaded for this set yet.</div>}{!question.isDemo && questionList.length === 1 && <div className="question-bank-notice" role="status">Only one question is currently available in this set.</div>}<div className="question-card"><div className="question-meta">UPSC CSE PRELIMS <span>● 1 mark</span></div><h2>{question.prompt}</h2></div><div className="answers">{question.options.map((option, i) => <div key={option} className={`answer-wrap ${eliminated.includes(i) ? "eliminated" : ""}`}><button className={`answer-option ${!testInProgress && displaySelected === i ? i === question.answer ? "correct" : "incorrect" : !testInProgress && displaySelected !== null && i === question.answer ? "correct" : testInProgress && displaySelected === i ? "test-selected" : ""}`} onClick={() => chooseAnswer(i)}><span className="answer-letter">{String.fromCharCode(65 + i)}</span><span>{option}</span>{!testInProgress && displaySelected !== null && i === question.answer && <b className="answer-mark">✓</b>}</button><button className="eliminate-button" onClick={() => setEliminated((value) => value.includes(i) ? value.filter((item) => item !== i) : [...value, i])}>×</button></div>)}</div>{!testInProgress && displaySelected !== null && <div className={`explanation ${displaySelected === question.answer ? "good" : "bad"}`}><b>{displaySelected === question.answer ? "Correct answer" : "Keep going — learn from this"}</b><RichExplanation content={question.explanation} /></div>}<div className="practice-footer">{testInProgress ? <><button className={`ghost-button ${testReviewFlags.includes(questionIndex) ? "marked-review" : ""}`} onClick={() => setTestReviewFlags((flags) => flags.includes(questionIndex) ? flags.filter((index) => index !== questionIndex) : [...flags, questionIndex])}>{testReviewFlags.includes(questionIndex) ? "✓ Marked" : "⚑ Review"}</button><button className="ghost-button" disabled={questionIndex === 0} onClick={() => setQuestionIndex((value) => Math.max(0, value - 1))}>Previous</button><button className="primary-button" onClick={nextQuestion}>{questionIndex + 1 >= questionList.length ? "Submit Test" : "Next question"} <span>→</span></button></> : <><button className="ghost-button" onClick={() => { setSelected(null); setEliminated([]); }}>Skip</button><button className="primary-button" onClick={nextQuestion}>{questionIndex + 1 >= questionList.length ? "Finish set" : "Next question"} <span>→</span></button></>}</div></Content>}
+      {screen === "Practice" && !practiceFinished && questionList.length > 0 && <PracticeQuestionScreen
+        question={question}
+        questionIndex={questionIndex}
+        questionCount={questionList.length}
+        subject={subject}
+        testInProgress={testInProgress}
+        seconds={seconds}
+        formatTime={formatTime}
+        practiceElapsedSeconds={practiceElapsedSeconds}
+        bookmarks={bookmarks}
+        selected={selected}
+        displaySelected={displaySelected}
+        answerChecked={answerChecked}
+        eliminated={eliminated}
+        toggleBookmark={toggleBookmark}
+        chooseAnswer={chooseAnswer}
+        eliminateOption={eliminateOption}
+        checkAnswer={checkPracticeAnswer}
+        nextQuestion={nextQuestion}
+        previousQuestion={() => { if (questionIndex === 0) return; setQuestionIndex((index) => Math.max(0, index - 1)); setSelected(null); setAnswerChecked(false); setEliminated([]); }}
+        openQuestionPalette={() => setShowQuestionPalette(true)}
+        copyQuestion={async () => { await navigator.clipboard?.writeText(question.prompt); setToast("Question copied"); }}
+        testReviewFlags={testReviewFlags}
+        toggleReviewFlag={(index) => setTestReviewFlags((flags) => flags.includes(index) ? flags.filter((item) => item !== index) : [...flags, index])}
+        setToast={setToast}
+        setTimerRunning={setTimerRunning}
+        setTestInProgress={setTestInProgress}
+        go={go}
+      />
+      }
 
       {screen === "Test Results" && submittedTest && <Content className="test-results-page" title="Test Results" subtitle="Your performance from this test." back={() => go("Tests")}><section className="test-score-card"><small>{subject} · {submittedTest.questions.length} questions</small><strong>{submittedTest.score}</strong><span>Score out of {submittedTest.questions.length * 2}</span></section><div className="test-result-stats"><div><b>{submittedTest.accuracy}%</b><small>Accuracy</small></div><div><b>{submittedTest.correct}</b><small>Correct</small></div><div><b>{submittedTest.incorrect}</b><small>Incorrect</small></div><div><b>{submittedTest.unanswered}</b><small>Unanswered</small></div></div><div className="test-review-heading"><h2>Review Questions</h2><span>{submittedTest.questions.length} total</span></div><div className="test-results-list">{submittedTest.questions.map((item, index) => <button key={item.id || index} className="test-result-question" onClick={() => { setTestReviewIndex(index); go("Test Review"); }}><span className={`test-result-status ${submittedTest.answers[index] === undefined ? "unanswered" : submittedTest.answers[index] === item.answer ? "right" : "wrong"}`}>{index + 1}</span><span><b>{item.prompt}</b><small>{submittedTest.answers[index] === undefined ? "Not answered" : submittedTest.answers[index] === item.answer ? "Correct" : "Incorrect"}{submittedTest.reviewFlags.includes(index) ? " · Marked for review" : ""}</small></span><i>›</i></button>)}</div><button className="primary-button full-button" onClick={() => go("Tests")}>Back to Tests <span>→</span></button></Content>}
       {screen === "Test Review" && submittedTest && submittedTest.questions[testReviewIndex] && <Content className="test-review-page" title="Review Question" subtitle={`Question ${testReviewIndex + 1} of ${submittedTest.questions.length}`} back={() => go("Test Results")}><div className="question-toolbar"><span className="question-tag">{submittedTest.questions[testReviewIndex].subject} · {submittedTest.questions[testReviewIndex].tag}</span><span className="question-tag">{submittedTest.answers[testReviewIndex] === undefined ? "Unanswered" : submittedTest.answers[testReviewIndex] === submittedTest.questions[testReviewIndex].answer ? "Correct" : "Incorrect"}</span></div><div className="question-card"><div className="question-meta">UPSC CSE PRELIMS <span>● 1 mark</span></div><h2>{submittedTest.questions[testReviewIndex].prompt}</h2></div><div className="answers">{submittedTest.questions[testReviewIndex].options.map((option, index) => <div key={option} className="answer-wrap"><div className={`answer-option ${index === submittedTest.questions[testReviewIndex].answer ? "correct" : submittedTest.answers[testReviewIndex] === index ? "incorrect" : ""}`}><span className="answer-letter">{String.fromCharCode(65 + index)}</span><span>{option}</span>{index === submittedTest.questions[testReviewIndex].answer && <b className="answer-mark">✓</b>}</div></div>)}</div><div className="explanation"><b>{submittedTest.answers[testReviewIndex] === submittedTest.questions[testReviewIndex].answer ? "Correct answer" : "Review the correct answer"}</b><RichExplanation content={submittedTest.questions[testReviewIndex].explanation} /></div><div className="practice-footer"><button className="ghost-button" disabled={testReviewIndex === 0} onClick={() => setTestReviewIndex((index) => Math.max(0, index - 1))}>Previous</button><button className="primary-button" disabled={testReviewIndex + 1 >= submittedTest.questions.length} onClick={() => setTestReviewIndex((index) => Math.min(submittedTest.questions.length - 1, index + 1))}>Next <span>→</span></button></div></Content>}
@@ -1170,11 +1314,11 @@ export default function Page() {
       {screen === "Mistake Book" && <Content className="mistake-page" title="Mistake Book" subtitle="Practice PYQs you got wrong and improve your accuracy." back={() => go("Home")} character="reading"><div className="mistake-summary"><strong>{mistakes.length}</strong><span><b>Total Mistakes</b><small>across all subjects</small></span></div><button className="choice-row mistake-action" onClick={() => { setMistakeSubjectFilter("All subjects"); setMistakeSort("All subjects"); setMistakeSearch(""); go("Mistake List"); }}><span className="subject-glyph hue-1"><MistakeChartIcon /></span><span><b>View all mistakes</b><small>Review all incorrect PYQs in one place.</small></span><span className="mistake-action-chevron" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="m8 4 8 8-8 8" /></svg></span></button><section className={`mistake-subject-group${showMistakeSubjectPicker ? " is-open" : ""}`}><button className="choice-row mistake-action" aria-expanded={showMistakeSubjectPicker} onClick={() => setShowMistakeSubjectPicker((value) => !value)}><span className="subject-glyph hue-1"><MistakeChartIcon /></span><span><b>View by subject</b><small>Focus on mistakes subject-wise.</small></span><span className="chevron"><svg viewBox="0 0 24 24" aria-hidden="true"><path d={showMistakeSubjectPicker ? "m5 16 7-8 7 8" : "m8 4 8 8-8 8"} /></svg></span></button>{showMistakeSubjectPicker && <div className="mistake-subject-panel"><label id="mistake-subject-label">Select Subject</label><div className={`mistake-subject-select-wrap${showMistakeSubjectOptions ? " options-open" : ""}`}><svg className="mistake-select-subject-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="m3 10 9-7 9 7M4 10h16M5 10v9m5-9v9m4-9v9m5-9v9M3 19h18M2 22h20" /></svg><button type="button" id="mistake-subject-select" className="mistake-subject-select-trigger" role="combobox" aria-labelledby="mistake-subject-label" aria-haspopup="listbox" aria-expanded={showMistakeSubjectOptions} aria-controls="mistake-subject-options" onClick={() => setShowMistakeSubjectOptions((value) => !value)} onKeyDown={(event) => { if (event.key === "Escape") setShowMistakeSubjectOptions(false); if (event.key === "ArrowDown" && !showMistakeSubjectOptions) { event.preventDefault(); setShowMistakeSubjectOptions(true); requestAnimationFrame(() => document.querySelector("#mistake-subject-options [role=option]")?.focus()); } }}>{mistakeSubjectSelection || "Choose a subject"}</button><svg className="mistake-select-chevron" viewBox="0 0 24 24" aria-hidden="true"><path d="m4 8 8 8 8-8" /></svg></div>{showMistakeSubjectOptions && <div className="mistake-subject-options" id="mistake-subject-options" role="listbox" aria-labelledby="mistake-subject-label"><button type="button" id="mistake-subject-first-option" role="option" aria-selected={!mistakeSubjectSelection} className={!mistakeSubjectSelection ? "selected" : ""} onClick={() => { setMistakeSubjectSelection(""); setShowMistakeSubjectOptions(false); }} onKeyDown={(event) => { if (event.key === "Escape") { event.preventDefault(); setShowMistakeSubjectOptions(false); document.getElementById("mistake-subject-select")?.focus(); } else if (event.key === "ArrowDown") { event.preventDefault(); event.currentTarget.nextElementSibling?.focus(); } }}>Choose a subject</button>{mistakeSubjectOptions.map((item) => <button type="button" key={item} role="option" aria-selected={mistakeSubjectSelection === item} className={mistakeSubjectSelection === item ? "selected" : ""} onClick={() => { setMistakeSubjectSelection(item); setShowMistakeSubjectOptions(false); }} onKeyDown={(event) => { if (event.key === "Escape") { event.preventDefault(); setShowMistakeSubjectOptions(false); document.getElementById("mistake-subject-select")?.focus(); } else if (event.key === "ArrowDown") { event.preventDefault(); event.currentTarget.nextElementSibling?.focus(); } else if (event.key === "ArrowUp") { event.preventDefault(); event.currentTarget.previousElementSibling?.focus(); } }}>{item}{mistakeSubjectSelection === item && <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m5 12 4 4L19 6" /></svg>}</button>)}</div>}<button className="primary-button" disabled={!mistakeSubjectSelection} onClick={() => { setMistakeSubjectFilter(mistakeSubjectSelection); setMistakeSort("Newest"); setMistakeSearch(""); go("Mistake List"); }}>View Mistakes <span>→</span></button></div>}</section></Content>}
       {screen === "Mistake List" && <Content className="mistake-list-page" title={mistakeSubjectFilter === "All subjects" ? "All Mistakes" : `${mistakeSubjectFilter} Mistakes`} subtitle={`${filteredMistakeItems.length} ${filteredMistakeItems.length === 1 ? "mistake" : "mistakes"}${mistakeSubjectFilter === "All subjects" ? " across all subjects" : ` in ${mistakeSubjectFilter}`}.`} back={() => go("Mistake Book")} character="reading"><div className="mistake-list-toolbar"><label><span>⌕</span><input aria-label="Search mistakes" placeholder="Search question or topic" value={mistakeSearch} onChange={(event) => setMistakeSearch(event.target.value)} /></label><select aria-label="Sort mistakes" value={mistakeSort} onChange={(event) => { const value = event.target.value; if (value === "All subjects") { setMistakeSubjectFilter(value); setMistakeSearch(""); } setMistakeSort(value); }}><option value="All subjects">All subjects</option><option value="Newest">Newest</option><option value="Oldest">Oldest</option></select></div>{filteredMistakeItems.length ? filteredMistakeItems.map((prompt,index)=>{const item=questions.find((question)=>question.prompt===prompt);return <article className="mistake-list-item" key={`${prompt}-${index}`}><span className="mistake-list-number">{index+1}</span><div><p>{prompt}</p><small>{item?.subject || "PYQ"}</small></div><button aria-label="Review mistake" onClick={() => { setReviewQuestionPrompt(prompt); setSubject(item?.subject || "Polity"); setQuestionIndex(0); setPracticeFinished(false); setSelected(null); setEliminated([]); go("Practice"); }}>›</button></article>;}) : <Empty icon="✓" title={mistakeSearch ? "No matching mistakes" : "No mistakes to review"} text={mistakeSearch ? "Try another question or topic." : "Questions you answer incorrectly will appear here."} />}</Content>}
 
-      {screen === "Notes" && <Content className="notes-page" title="My Notes" subtitle="Jot down what matters." back={() => go("Home")} character="reading"><div className="notes-toolbar"><div><b>My Notes ({notes.length})</b><small>{notes.length ? "Drag to reorder your notes." : "Your saved notes"}</small></div>{notes.length > 1 && <button className="text-action" onClick={() => setToast("Notes are in their saved order")}>↻ Reset Order</button>}</div>{notes.length > 0 && <div className="notes-list">{notes.map((note) => { const words = note.text.trim().split(/\s+/).filter(Boolean).length; const title = note.text.split(/\n/)[0].slice(0, 42) || "Untitled note"; return <article className="note-card" key={note.id}><span className="note-drag-handle" aria-hidden="true">⠿</span><div className="note-card-copy"><b>{title}</b><small>{words} words</small></div><button aria-label={`Delete ${title}`} onClick={async () => { if (user && !user.is_demo) { const { error } = await supabase.from("notes").delete().eq("id", note.id).eq("user_id", user.id); if (error) return setToast("Could not delete note"); } setNotes((value) => value.filter((item) => item.id !== note.id)); }}>⋮</button></article>; })}</div>}{editingNote && <div className="note-editor"><textarea className="note-input" value={noteDraft} onChange={(e) => setNoteDraft(e.target.value)} placeholder="Write a quick note…" rows={4} /><div><button className="ghost-button" onClick={() => { setEditingNote(false); setNoteDraft(""); }}>Cancel</button><button className="primary-button" onClick={saveNote}>Save note <span>＋</span></button></div></div>}{!editingNote && <div className="note-create-dock"><p>Start writing your ideas.</p><button className="primary-button" onClick={() => setEditingNote(true)}>Create new notes <span>＋</span></button></div>}</Content>}
+      {screen === "Notes" && <Content className="notes-page" title="My Notes" subtitle="Jot down what matters." back={() => go("Home")} character="reading"><div className="notes-toolbar"><div><b>My Notes ({notes.length})</b><small>{notes.length ? "Tap a note to open and edit it." : "Your saved notes"}</small></div>{notes.length > 1 && <button className="text-action" onClick={() => setToast("Notes are in their saved order")}>↻ Reset Order</button>}</div>{notes.length > 0 && <div className="notes-list">{notes.map((note) => { const plainText = notePlainText(note.text); const words = plainText.split(/\s+/).filter(Boolean).length; const title = plainText.split(/\n/)[0].slice(0, 42) || "Untitled note"; return <article className={`note-card${draggedNoteId === note.id ? " dragging" : ""}`} data-note-id={note.id} key={note.id} role="button" tabIndex={0} onDragOver={(event) => { if (noteDragRef.current) { event.preventDefault(); moveNote(noteDragRef.current.id, note.id); } }} onDrop={(event) => { event.preventDefault(); finishNativeNoteDrag(); }} onClick={() => openNoteEditor(note)} onKeyDown={(event) => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); openNoteEditor(note); } }}><button type="button" draggable className="note-drag-handle" aria-label={`Reorder ${title}`} onClick={(event) => event.stopPropagation()} onDragStart={(event) => { event.dataTransfer.effectAllowed = "move"; noteDragRef.current = { id: note.id, moved: true }; setDraggedNoteId(note.id); }} onDragEnd={finishNativeNoteDrag} onKeyDown={(event) => { event.stopPropagation(); if (event.key === "ArrowUp" && notes.findIndex((item) => item.id === note.id) > 0) moveNote(note.id, notes[notes.findIndex((item) => item.id === note.id) - 1].id); if (event.key === "ArrowDown" && notes.findIndex((item) => item.id === note.id) < notes.length - 1) moveNote(note.id, notes[notes.findIndex((item) => item.id === note.id) + 1].id); }} onPointerDown={(event) => startNoteDrag(event, note.id)} onPointerMove={moveNoteDrag} onPointerUp={endNoteDrag} onPointerCancel={endNoteDrag}>⠿</button><div className="note-card-copy"><b>{title}</b><small>{words} words · {note.date || "Saved note"}</small></div><button aria-label={`More options for ${title}`} aria-haspopup="menu" aria-expanded={noteMenuId === note.id} onClick={(event) => { event.stopPropagation(); setNoteMenuId((id) => id === note.id ? null : note.id); }}>⋮</button>{noteMenuId === note.id && <div className="note-actions-menu" role="menu" onClick={(event) => event.stopPropagation()}><button role="menuitem" onClick={() => openNoteEditor(note)}>Edit note</button><button role="menuitem" className="delete" onClick={() => deleteNote(note)}>Delete note</button></div>}</article>; })}</div>}{!editingNote && <div className="note-create-dock"><p>Start writing your ideas.</p><button className="primary-button" onClick={() => openNoteEditor()}>Create new note <span>＋</span></button></div>}{editingNote && <div className="note-editor-backdrop" role="presentation" onClick={closeNoteEditor}><section className="note-editor-dialog" role="dialog" aria-modal="true" aria-labelledby="note-editor-title" onClick={(event) => event.stopPropagation()}><header><div><h2 id="note-editor-title">{editingNoteId !== null ? "Edit note" : "New note"}</h2><p>Write down what you want to remember.</p></div><button className="note-editor-close" aria-label="Close note editor" onClick={closeNoteEditor}>×</button></header><textarea className="note-input" aria-label="Note text" value={noteDraft} onChange={(event) => setNoteDraft(event.target.value)} placeholder="Write a quick note…" rows={5} /><div className="note-editor-actions"><button className="ghost-button" onClick={closeNoteEditor}>Cancel</button><button className="primary-button" onClick={saveNote} disabled={!noteDraft.trim()}>{editingNoteId !== null ? "Update note" : <>Save note <span>＋</span></>}</button></div></section></div>}</Content>}
 
       {screen === "Study Timer" && <Content className="timer-page" title="Study Timer" subtitle="" back={() => go("Home")}><button className="timer-more" aria-label="Timer options" onClick={() => setToast("Timer presets are ready below")}>•••</button><div className="timer-modes">{["Stopwatch", "Countdown", "Pomodoro"].map((item) => <button className={mode === item ? "selected" : ""} key={item} onClick={() => { setMode(item); setTimerRunning(false); const minutes = item === "Pomodoro" ? focusMinutes : item === "Countdown" ? 10 : 0; setTimerMinutes(minutes); setSeconds(minutes * 60); }}><span>{item === "Stopwatch" ? "◷" : item === "Countdown" ? "⌛" : "◉"}</span>{item}</button>)}</div>{mode !== "Stopwatch" && <div className="timer-duration-setting"><label htmlFor="timer-duration">Duration</label><div className="timer-duration-input"><button type="button" aria-label="Decrease duration by one minute" disabled={timerRunning || timerMinutes <= 1} onClick={() => setTimerDuration(timerMinutes - 1)}>−</button><input id="timer-duration" type="number" inputMode="numeric" min="1" max="999" value={timerMinutes} disabled={timerRunning} onChange={(event) => { if (event.target.value) setTimerDuration(event.target.value); }} /><span>min</span><button type="button" aria-label="Increase duration by one minute" disabled={timerRunning || timerMinutes >= 999} onClick={() => setTimerDuration(timerMinutes + 1)}>+</button></div></div>}<div className="timer-face"><div className="timer-progress" style={{ "--progress-angle": `${timerProgress * 3.6}deg` }}><span className="timer-plant" aria-hidden="true"><svg viewBox="0 0 36 36" fill="none"><circle cx="18" cy="18" r="17" stroke="currentColor" strokeOpacity=".45"/><path d="M18 25v-9m0 4c-5.4 0-8-2.6-8-7 5.4 0 8 2.6 8 7Zm0-2c0-5 2.5-7.5 7.5-7.5 0 5-2.5 7.5-7.5 7.5Z" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/></svg></span><span className="timer-caption">{mode === "Pomodoro" ? "Focus Time" : `${mode} session`}</span><strong>{formatTime(seconds)}</strong><small>Do it for your dream &lt;3</small></div></div><div className="timer-actions"><button className="timer-play" aria-label={timerRunning ? "Pause timer" : "Start timer"} onClick={() => setTimerRunning((value) => !value)}>{timerRunning ? "Ⅱ" : "▶"}</button><button className="timer-stop" aria-label="Reset timer" onClick={() => { setTimerRunning(false); setSeconds(mode === "Stopwatch" ? 0 : timerMinutes * 60); }}>■</button></div><div className="timer-presets"><h3>Session Presets</h3>{[["Focus Time", focusMinutes * 60, `${focusMinutes} min`, "violet"], ["Short Break", 300, "5 min", "teal"], ["Long Break", 900, "15 min", "blue"]].map(([label, value, duration, tone]) => <button className="timer-preset" key={label} onClick={() => { const minutes = label === "Focus Time" ? focusMinutes : value / 60; setMode("Pomodoro"); setTimerMinutes(minutes); setSeconds(minutes * 60); setTimerRunning(false); }}><span className={`timer-preset-icon ${tone}`}>{label === "Focus Time" ? "♧" : label === "Short Break" ? "◉" : "✦"}</span><b>{label}</b><small>{duration}</small><span className="chevron">›</span></button>)}</div></Content>}
 
-      {screen === "Meditation" && <Content className="meditation-page" title="" subtitle="" back={() => { setMeditationRunning(false); go("Home"); }}><button className="meditation-sound" aria-label={meditationSound ? "Mute ambient sound" : "Enable ambient sound"} onClick={() => { setMeditationSound((value) => !value); setToast("Ambient sound controls updated"); }}>{meditationSound ? "♫" : "♪"}</button><div className="meditation-intro"><div><p>Take a deep breath, let’s <b>clear your mind.</b></p><small>Meditation helps you relax, reduce stress and improve focus.</small></div><MeditationMascot /></div><section className="meditation-card"><div className="meditation-time-label"><span />Meditation Time<span /></div><div className="meditation-ring" style={{ "--progress-angle": `${meditationProgress * 3.6}deg` }}><div className="meditation-scene"><strong>{formatTime(meditationSeconds)}</strong><small>♧ Meditation</small></div></div><div className="meditation-presets">{[5,10,15].map((minutes) => <button key={minutes} className={meditationMinutes === minutes ? "selected" : ""} onClick={() => { setMeditationMinutes(minutes); setMeditationSeconds(minutes * 60); setMeditationRunning(false); }}><b>{minutes}</b><small>min</small></button>)}</div></section><div className="meditation-tip"><span>♧</span><p>Tip: Close your eyes. Focus on a white dot with a black background in your mind.</p></div><button className="primary-button meditation-start" onClick={() => { if (meditationSeconds === 0) setMeditationSeconds(meditationMinutes * 60); setMeditationRunning((value) => !value); }}>{meditationRunning ? "Ⅱ  Pause Meditation" : "▶  Start Meditation"}</button></Content>}
+      {screen === "Meditation" && <Content className="meditation-page" title="" subtitle="" back={() => { setMeditationRunning(false); go("Home"); }}><button className={`meditation-sound${showMusicControls ? " controls-open" : ""}`} aria-label={showMusicControls ? "Close music controls" : "Open music controls"} aria-expanded={showMusicControls} onClick={() => setShowMusicControls((visible) => !visible)}>{showMusicControls ? "×" : "♫"}</button><div className="meditation-intro"><div><p>Take a deep breath, let’s <b>clear your mind.</b></p><small>Meditation helps you relax, reduce stress and improve focus.</small></div><MeditationMascot /></div><section className="meditation-card"><div className="meditation-time-label"><span />Meditation Time<span /></div><div className="meditation-ring" style={{ "--progress-angle": `${meditationProgress * 3.6}deg` }}><div className="meditation-scene"><strong>{formatTime(meditationSeconds)}</strong><small>♧ Meditation</small></div></div><div className="meditation-presets">{[5,10,15].map((minutes) => <button key={minutes} className={meditationMinutes === minutes ? "selected" : ""} onClick={() => { setMeditationMinutes(minutes); setMeditationSeconds(minutes * 60); setMeditationRunning(false); }}><b>{minutes}</b><small>min</small></button>)}</div></section><div className="meditation-tip"><span>♧</span><p>Tip: Close your eyes. Focus on a white dot with a black background in your mind.</p></div><button className="primary-button meditation-start" onClick={() => { if (meditationSeconds === 0) setMeditationSeconds(meditationMinutes * 60); setMeditationRunning((value) => !value); }}>{meditationRunning ? "Ⅱ  Pause Meditation" : "▶  Start Meditation"}</button></Content>}
 
       {screen === "My Habits" && <Content className="habits-page" title="My Habits" subtitle="Build habits. Stay consistent." back={() => go("Home")}>
         <button className="habit-add-top" aria-label="Add new habit" onClick={() => openHabitForm()}>＋</button>
@@ -1211,9 +1355,9 @@ export default function Page() {
         </section></div>}
       </Content>}
 
-      {screen === "Analytics & Streak" && <Content className="analytics-page" title="Analytics" subtitle="Track your learning journey." back={() => go("Home")}><button className="analytics-help" aria-label="Streak details" onClick={() => go("Streaks with Cloudy")}>＋</button><div className="analytics-completed-card"><div><small>PYQs Completed</small><strong>{completedQuestionCount.toLocaleString()} <span>/ {questions.length.toLocaleString()}</span></strong></div><b>{completedPercent}%</b><div className="analytics-progress"><span style={{width:`${completedPercent}%`}} /></div></div><div className="analytics-summary-grid"><div className="analytics-stat-card"><span>▥</span><small>Incorrect Answers</small><b>{Math.max(0,analytics.attempted-analytics.correctCount).toLocaleString()}</b><em>Keep reviewing to improve!</em><i className="pink-progress" /></div><div className="analytics-stat-card"><span>◌</span><small>Overall Accuracy</small><b>{analytics.correct}%</b><em>{analytics.attempted ? "Good job! Keep it up!" : "Start a practice session"}</em><i className="green-progress" /></div></div><div className="analytics-strength-grid"><section><h3><span>♧</span> Strongest</h3>{strongestSubjects.length ? strongestSubjects.map((item) => <div key={item.name}><span>{item.name}</span><b>{item.accuracy}%</b></div>) : <p>Your strongest subjects will appear after practice.</p>}</section><section><h3><span>✦</span> Needs Attention</h3>{attentionSubjects.length ? attentionSubjects.map((item) => <div key={item.name}><span>{item.name}</span><b>{item.accuracy}%</b></div>) : <p>Practice another subject to compare your results.</p>}</section></div><section className="subject-performance"><div className="subject-performance-heading"><h3>Subject Performance</h3><button onClick={() => setToast("Showing all available subjects")}>View all ›</button></div><div className="subject-performance-columns"><span>SUBJECT</span><span>COMPLETION</span><span>ACCURACY</span></div>{subjectPerformance.length ? subjectPerformance.map((item) => <div className="subject-performance-row" key={item.name}><span><i>♧</i>{item.name}</span><div><small>{item.completion}%</small><b><i style={{width:`${item.completion}%`}} /></b></div><strong>{item.attempted ? `${item.accuracy}%` : "—"}</strong></div>) : <p className="subject-performance-empty">Questions and results will appear here after your first practice session.</p>}</section>{showStreakDetails && <div className="analytics-modal-backdrop" onClick={() => setShowStreakDetails(false)}><section className="streak-details-modal" onClick={(event) => event.stopPropagation()}><button className="analytics-close" aria-label="Close streak details" onClick={() => setShowStreakDetails(false)}>×</button><div className="streak-modal-heading"><span className="streak-cloud">☁</span><div><h2>Streaks with Cloudy</h2><p>Keep your streak alive!</p></div></div><div className="streak-current-card"><div><small>Current Streak</small><strong>{analytics.streak} <span>days</span></strong><p>Keep it going{displayName ? `, ${displayName}` : ""}! 👋</p></div><div><small>Best streak</small><b>{analytics.bestStreak} days</b></div><div className="streak-week">{Array.from({length:7},(_,index)=>{const date=new Date();date.setDate(date.getDate()-(6-index));const dayKey=date.toLocaleDateString("en-CA");const completed=qualifiesForStreak(attemptHistory, dayKey);return <span key={dayKey} className={completed?"done":""}><i>{completed?"✓":"○"}</i><small>{index===6?"Today":date.toLocaleDateString("en-US",{weekday:"short"})}</small></span>;})}</div></div><div className="streak-how-card"><b>♧ &nbsp; How streak works</b><p>Your streak counts days when you practice 15 questions or more every day.</p><small>• Complete 15 or more questions in a day to keep your streak alive.</small><small>• If you miss a day, your streak resets to 0.</small></div></section></div>}</Content>}
+      {screen === "Analytics & Streak" && <Content className="analytics-page" title="Analytics" subtitle="Track your learning journey." back={() => go("Home")}><div className="analytics-completed-card"><div><small>PYQs Completed</small><strong>{completedQuestionCount.toLocaleString()} <span>/ {questions.length.toLocaleString()}</span></strong></div><b>{completedPercent}%</b><div className="analytics-progress"><span style={{width:`${completedPercent}%`}} /></div></div><div className="analytics-summary-grid"><div className="analytics-stat-card"><span>▥</span><small>Incorrect Answers</small><b>{Math.max(0,analytics.attempted-analytics.correctCount).toLocaleString()}</b><em>Keep reviewing to improve!</em><i className="pink-progress" /></div><div className="analytics-stat-card"><span>◌</span><small>Overall Accuracy</small><b>{analytics.correct}%</b><em>{analytics.attempted ? "Good job! Keep it up!" : "Start a practice session"}</em><i className="green-progress" /></div></div><div className="analytics-strength-grid"><section><h3><span>♧</span> Strongest</h3>{strongestSubjects.length ? strongestSubjects.map((item) => <div key={item.name}><span>{item.name}</span><b>{item.accuracy}%</b></div>) : <p>Your strongest subjects will appear after practice.</p>}</section><section><h3><span>✦</span> Needs Attention</h3>{attentionSubjects.length ? attentionSubjects.map((item) => <div key={item.name}><span>{item.name}</span><b>{item.accuracy}%</b></div>) : <p>Practice another subject to compare your results.</p>}</section></div><section className="subject-performance"><div className="subject-performance-heading"><h3>Subject Performance</h3><button onClick={() => setToast("Showing all available subjects")}>View all ›</button></div><div className="subject-performance-columns"><span>SUBJECT</span><span>COMPLETION</span><span>ACCURACY</span></div>{subjectPerformance.length ? subjectPerformance.map((item) => <div className="subject-performance-row" key={item.name}><span><i>♧</i>{item.name}</span><div><small>{item.completion}%</small><b><i style={{width:`${item.completion}%`}} /></b></div><strong>{item.attempted ? `${item.accuracy}%` : "—"}</strong></div>) : <p className="subject-performance-empty">Questions and results will appear here after your first practice session.</p>}</section>{showStreakDetails && <div className="analytics-modal-backdrop" onClick={() => setShowStreakDetails(false)}><section className="streak-details-modal" onClick={(event) => event.stopPropagation()}><button className="analytics-close" aria-label="Close streak details" onClick={() => setShowStreakDetails(false)}>×</button><div className="streak-modal-heading"><span className="streak-cloud">☁</span><div><h2>Streaks with Cloudy</h2><p>Keep your streak alive!</p></div></div><div className="streak-current-card"><div><small>Current Streak</small><strong>{analytics.streak} <span>days</span></strong><p>Keep it going{displayName ? `, ${displayName}` : ""}! 👋</p></div><div><small>Best streak</small><b>{analytics.bestStreak} days</b></div><div className="streak-week">{Array.from({length:7},(_,index)=>{const date=new Date();date.setDate(date.getDate()-(6-index));const dayKey=date.toLocaleDateString("en-CA");const completed=qualifiesForStreak(attemptHistory, dayKey);return <span key={dayKey} className={completed?"done":""}><i>{completed?"✓":"○"}</i><small>{index===6?"Today":date.toLocaleDateString("en-US",{weekday:"short"})}</small></span>;})}</div></div><div className="streak-how-card"><b>♧ &nbsp; How streak works</b><p>Your streak counts days when you practice 15 questions or more every day.</p><small>• Complete 15 or more questions in a day to keep your streak alive.</small><small>• If you miss a day, your streak resets to 0.</small></div></section></div>}</Content>}
 
-      {screen === "Streaks with Cloudy" && <Content className="streak-page" title="Streaks with Cloudy" subtitle="Keep your streak alive!" back={() => go("Analytics & Streak")} character="happy"><button className="streak-info-button" aria-label="How streaks work" onClick={() => setToast("Practice 15 or more questions each day to keep your streak")}>ⓘ</button><section className="streak-current-card"><div className="streak-card-top"><div><small>Current Streak</small><strong>{analytics.streak} <span>days</span></strong><p>Keep it going{displayName ? `, ${displayName}` : ""}! 👋</p></div><div><small>Best streak</small><b>{analytics.bestStreak} days</b></div></div><div className="streak-week">{Array.from({length:7},(_,index)=>{const date=new Date();date.setDate(date.getDate()-(6-index));const dayKey=date.toLocaleDateString("en-CA");const completed=qualifiesForStreak(attemptHistory, dayKey);return <span key={dayKey} className={completed?"done":""}><i>{completed?"✓":"○"}</i><small>{index===6?"Today":date.toLocaleDateString("en-US",{weekday:"short"})}</small></span>;})}</div></section><section className="streak-how-card"><b>♧ &nbsp; How streak works</b><p>Your streak is counted as days when you practice <strong>15 questions or more everyday.</strong></p><small>• Complete 15 or more questions in a day to keep your streak alive.</small><small>• If you miss a day, your streak resets to 0.</small></section></Content>}
+      {screen === "Streaks with Cloudy" && <Content className="streak-page" title="Streaks with Cloudy" subtitle="Keep your streak alive!" back={() => go("Home")} character="happy"><button className="streak-info-button" aria-label="How streaks work" onClick={() => setToast("Practice 15 or more questions each day to keep your streak")}>ⓘ</button><section className="streak-current-card"><div className="streak-card-top"><div><small>Current Streak</small><strong>{analytics.streak} <span>days</span></strong><p>Keep it going{displayName ? `, ${displayName}` : ""}! 👋</p></div><div><small>Best streak</small><b>{analytics.bestStreak} days</b></div></div><div className="streak-week">{Array.from({length:7},(_,index)=>{const date=new Date();date.setDate(date.getDate()-(6-index));const dayKey=date.toLocaleDateString("en-CA");const completed=qualifiesForStreak(attemptHistory, dayKey);return <span key={dayKey} className={completed?"done":""}><i>{completed?"✓":"○"}</i><small>{index===6?"Today":date.toLocaleDateString("en-US",{weekday:"short"})}</small></span>;})}</div></section><section className="streak-how-card"><b>♧ &nbsp; How streak works</b><p>Your streak is counted as days when you practice <strong>15 questions or more everyday.</strong></p><small>• Complete 15 or more questions in a day to keep your streak alive.</small><small>• If you miss a day, your streak resets to 0.</small></section></Content>}
       {screen === "CSR Activity" && <Content className="impact-page" title="" subtitle="" back={() => go("Home")}><div className="impact-title"><span>♡</span><h1>Social Impact</h1></div><div className="impact-info-card">{[["♧","How it works","A portion of app’s revenue goes towards funding the education of underprivileged children."],["♧","100% Transparent","We are committed to publish every transaction and donation receipt on our website."],["♧","Partner Organizations","We donate only to government-registered NGOs and Orphanages."]].map(([glyph,title,description])=><div className="impact-info-row" key={title}><span>{glyph}</span><div><b>{title}</b><p>{description}</p></div></div>)}</div><section className="impact-founder-card"><span className="impact-quote-mark">“</span><h2>Note from the Founder</h2><p>As UPSC aspirants, we all dream of serving the nation someday. But service doesn’t have to wait. For you, it’s simply subscribing to the app and practicing PYQs. Behind the scenes, a portion of our revenue helps fund the education of those who cannot afford it. Please visit our website for more information.</p><div><span>♡</span><small>With love and care,<b>Vimanyu Chaturvedi.</b></small></div></section><button className="impact-website-button" onClick={() => setToast("Website link will be added by the client")}>Visit our website <span>↗</span></button></Content>}
 
       {screen === "About You" && <Content className="about-you-page" title="A little about you" subtitle="We’ll tailor your UPSC preparation to your goals." back={() => go("Welcome")} character><form className="about-you-form" onSubmit={saveAboutYou}><label className="about-name-field" htmlFor="about-name">Your name<span className="about-input-wrap"><img src={figmaAsset.profile} alt="" /><input id="about-name" value={profileName} onChange={(event) => setProfileName(event.target.value)} placeholder="Enter your name" maxLength={80} required /></span></label><fieldset><legend>How many attempts have you taken?</legend><div className="about-choice-row">{["0", "1", "2", "3+"].map((value) => <button type="button" key={value} className={aboutExamCount === value ? "selected" : ""} onClick={() => setAboutExamCount(value)}>{value}</button>)}</div></fieldset><label className="about-year-field">Target exam year<span className="about-input-wrap"><span aria-hidden="true">▣</span><select value={aboutTargetYear} onChange={(event) => setAboutTargetYear(event.target.value)}><option value="">Select your target year</option>{designYears.slice(0, 10).map((year) => <option key={year}>{year}</option>)}</select></span></label><div className="about-tip"><span>✦</span><p><b>Made for your preparation</b><small>Your selections help personalize your study recommendations and progress.</small></p></div><button className="primary-button full-button" type="submit">Start My Preparation</button></form></Content>}
@@ -1253,7 +1397,7 @@ function MeditationMascot() {
 }
 
 function ActionCard({ title, body, asset, tone, onClick }) { const parts = { "Practice by Subject": ["Practice by", "Subject"], "Practice by Year": ["Practice by", "Year"], "Random Practice": ["Random", "Practice"], "Mistake Book": ["Mistake", "Book"] }[title] || [title, ""]; return <button className={`action-card ${tone}`} onClick={onClick}><span className={`card-glyph ${tone}`}><img src={asset} alt="" /></span><b><span>{parts[0]}</span><em>{parts[1]}</em></b><small>{body}</small><span className="round-arrow"><img src={figmaAsset.arrow} alt="" /></span></button>; }
-function Content({ title, subtitle, back, children, mascot = false, character = false, showBack = true, className = "" }) {
+function Content({ title, subtitle, back, children, mascot = false, character = false, showBack = true, className = "", headingActions = null }) {
   const animationFiles = {
     idle: "cloudy-idle.json",
     happy: "cloudy-happy-jump.json",
@@ -1270,11 +1414,53 @@ function Content({ title, subtitle, back, children, mascot = false, character = 
     : null;
   return <section className={`content-page${showBack ? "" : " no-back"}${className ? ` ${className}` : ""}`}>
     {showBack && <button className="back-button" aria-label="Go back" onClick={back}>‹</button>}
-    <div className="content-body"><div className="page-heading"><div><h1>{title}</h1><p>{subtitle}</p></div>
+    <div className="content-body"><div className="page-heading"><div><h1>{title}</h1><p>{subtitle}</p></div>{headingActions}
       {animationSrc && <div className={`content-mascot character-mascot ${characterName}-mascot`} aria-hidden="true"><Lottie src={animationSrc} autoplay loop /></div>}
       {mascot && <div className="content-mascot" aria-hidden="true"><img src={figmaAsset.mascot} alt="" /><img src="/figma-assets/s2-b34d8.png" alt="" /></div>}
     </div>{children}</div>
   </section>;
+}
+function PracticeQuestionScreen({ question, questionIndex, questionCount, subject, testInProgress, seconds, formatTime, practiceElapsedSeconds, bookmarks, selected, displaySelected, answerChecked, eliminated, toggleBookmark, chooseAnswer, eliminateOption, checkAnswer, nextQuestion, previousQuestion, openQuestionPalette, copyQuestion, testReviewFlags, toggleReviewFlag, setToast, setTimerRunning, setTestInProgress, go }) {
+  const [showQuestionMenu, setShowQuestionMenu] = useState(false);
+  const topic = question.topic || question.tag || "General";
+  const current = Math.min(questionIndex + 1, questionCount);
+  const progress = questionCount ? Math.min(100, (current / questionCount) * 100) : 0;
+  const headingActions = <div className="practice-heading-actions">
+    <button className={`practice-icon-button ${bookmarks.includes(question.prompt) ? "active" : ""}`} aria-label={bookmarks.includes(question.prompt) ? "Remove bookmark" : "Bookmark question"} onClick={toggleBookmark}><img src={figmaAsset.bookmarks} alt="" /></button>
+    <button className="practice-icon-button" aria-label="Copy question" onClick={copyQuestion}><span className="practice-copy-icon" aria-hidden="true" /></button>
+    <span className="practice-clock"><img src={figmaAsset.timer} alt="" />{formatTime(testInProgress ? seconds : practiceElapsedSeconds)}</span>
+  </div>;
+  return <Content className={`practice-page${testInProgress ? " test-practice-page" : ""}`} title={testInProgress ? "Test Mode" : "Practice"} subtitle="" headingActions={headingActions} back={() => { setTimerRunning(false); setTestInProgress(false); go("Home"); }}>
+    <button className="practice-overflow" aria-label="Question options" aria-expanded={showQuestionMenu} onClick={() => setShowQuestionMenu((visible) => !visible)}><img src="/figma-assets/2d470055-e9cd-4959-ae21-9059d311e4d7-d9ed0.svg" alt="" /></button>
+    {showQuestionMenu && <div className="practice-question-menu"><button onClick={() => { setShowQuestionMenu(false); setToast("Question reported for review"); }}>Report question</button>{testInProgress && <button onClick={() => { openQuestionPalette(); setShowQuestionMenu(false); }}>Question palette</button>}</div>}
+    <div className="practice-progress-block">
+      <div className="practice-progress-row"><div className="practice-progress-track"><span style={{ width: `${progress}%` }} /></div><strong>{current}/{questionCount}</strong></div>
+      <div className="practice-meta-row"><span>Year: {question.year || "—"}</span><i /><span>Subject: {question.subject || subject}</span><i /><span>Topic: {topic}</span></div>
+    </div>
+    <section className="practice-question-panel" aria-label="Practice question">
+      <div className="practice-question-card">
+        <span className="practice-question-badge">Q.</span>
+        <div className="practice-question-copy"><RichExplanation content={question.prompt} /></div>
+      </div>
+      <div className="practice-options">{question.options.map((option, index) => {
+        const letter = String.fromCharCode(65 + index);
+        const isEliminated = eliminated.includes(index);
+        const isChecked = answerChecked && !testInProgress;
+        const isSelected = testInProgress ? displaySelected === index : selected === index;
+        const stateClass = isChecked && displaySelected === index ? index === question.answer ? "correct" : "incorrect" : isSelected ? "selected" : "";
+        return <div className={`practice-option-wrap ${isEliminated ? "eliminated" : ""}`} key={`${question.id || question.prompt}-${index}`}>
+          <button className="practice-eliminate" aria-label={`Eliminate option ${letter}`} disabled={isEliminated || isChecked} onClick={() => eliminateOption(index)}><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M2.5 12s3.4-6 9.5-6a9.5 9.5 0 0 1 5.5 1.7M21.5 12s-3.4 6-9.5 6a9.5 9.5 0 0 1-5.5-1.7M9.8 9.8a3.1 3.1 0 0 0 4.4 4.4M3 3l18 18" /></svg></button>
+          <button className={`practice-option ${stateClass}`} disabled={isEliminated || isChecked} aria-pressed={isSelected} onClick={() => chooseAnswer(index)}><span className="practice-option-letter">{letter}</span><span className="practice-option-text">{option}</span>{isChecked && displaySelected === index && index === question.answer ? <span className="practice-radio checked">✓</span> : <span className={`practice-radio${isSelected && !isChecked ? " chosen" : ""}`} />}</button>
+        </div>;
+      })}</div>
+      {!testInProgress && <button className="primary-button practice-check-answer" disabled={selected === null || answerChecked} onClick={checkAnswer}>Check Answer</button>}
+      {!testInProgress && answerChecked && <div className={`practice-explanation ${displaySelected === question.answer ? "good" : "bad"}`}><div className="practice-explanation-heading"><b>{displaySelected === question.answer ? "✓" : "!"}</b><strong>{displaySelected === question.answer ? `Correct Answer: ${String.fromCharCode(65 + question.answer)}` : "Review the correct answer"}</strong><button aria-label="Collapse explanation" onClick={(event) => event.currentTarget.closest(".practice-explanation").classList.toggle("collapsed")}>⌃</button></div><div className="practice-explanation-copy"><b>Explanation:</b><RichExplanation content={question.explanation} /></div></div>}
+    </section>
+    <div className="practice-navigation">
+      {testInProgress ? <><button className={`practice-previous ${testReviewFlags.includes(questionIndex) ? "marked" : ""}`} onClick={() => toggleReviewFlag(questionIndex)}>{testReviewFlags.includes(questionIndex) ? "✓ Marked" : "⚑ Review"}</button><button className="practice-previous" disabled={questionIndex === 0} onClick={previousQuestion}><img src="/figma-assets/2d470055-e9cd-4959-ae21-9059d311e4d7-b4f07.svg" alt="" />Previous</button></> : <button className="practice-previous" disabled={questionIndex === 0} onClick={previousQuestion}><img src="/figma-assets/2d470055-e9cd-4959-ae21-9059d311e4d7-b4f07.svg" alt="" />Previous</button>}
+      <button className="primary-button practice-next" onClick={nextQuestion}>{questionIndex + 1 >= questionCount ? testInProgress ? "Submit Test" : "Finish set" : "Next"}<img src="/figma-assets/s2-77f44.svg" alt="" /></button>
+    </div>
+  </Content>;
 }
 function Empty({ icon: glyph, title, text }) { return <div className="empty-state"><span>{glyph}</span><b>{title}</b><p>{text}</p></div>; }
 function MistakeChartIcon() { return <svg aria-hidden="true" viewBox="0 0 24 24" fill="none"><path d="M4 19V5M4 19h17M7 15l4-4 3 2 5-7" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"/><path d="M16 6h3v3" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"/></svg>; }

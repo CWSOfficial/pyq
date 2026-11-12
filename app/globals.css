@@ -234,16 +234,16 @@ html, body { font-family: Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", 
 .year-chip small { font-size:var(--font-body-tiny); }
 .drawer-backdrop { background: transparent; backdrop-filter: none; }
 .drawer { position: relative; width: min(94%, 356px); max-width: 356px; height: 100%; padding: 0; border: 0; border-radius: 40px 0 0 40px; background: var(--surface); box-shadow: none; }
-.drawer-close { position: absolute; left: 20px; top: 90px; width: 44px; height: 44px; display: grid; place-items: center; border: 0; border-radius: 10px; background: var(--surface-raised); }
+.drawer-close { position: absolute; left: 20px; top: 24px; width: 44px; height: 44px; display: grid; place-items: center; border: 0; border-radius: 10px; background: var(--surface-raised); }
 .drawer-close img { width: 24px; height: 24px; }
-  .drawer-user { position: absolute; top: 128px; left: 20px; right: 24px; height: 95px; display: flex; align-items: center; gap: 10px; padding: 0; border-bottom: 1px solid var(--border); }
+.drawer-user { position: absolute; top: 76px; left: 20px; right: 24px; height: 95px; display: flex; align-items: center; gap: 10px; padding: 0; border-bottom: 1px solid var(--border); }
 .drawer-avatar { width: 50px; height: 50px; flex: none; border: 3px solid var(--purple); border-radius: 50%; object-fit: cover; }
 .drawer-avatar-placeholder { display: grid; place-items: center; background: #211a31; object-fit: initial; }
 .drawer-avatar-placeholder img { width: 25px; height: 25px; object-fit: contain; }
 .drawer-user > div { min-width: 0; display: flex; flex-direction: column; gap: 4px; flex: 1; margin-top: 0; }
 .drawer-user b { font-size:var(--font-body-small); line-height: 20px; color: #8d4cff; font-weight: 500; }
 .drawer-user small { font-size:var(--font-body-tiny); line-height: 18px; color: var(--secondary); }
-  .drawer-scroll { position: absolute; left: 20px; right: 24px; top: 247px; bottom: 20px; overflow-y: auto; padding: 0; display: flex; flex-direction: column; gap: 10px; }
+.drawer-scroll { position: absolute; left: 20px; right: 24px; top: 195px; bottom: 20px; overflow-y: auto; padding: 0; display: flex; flex-direction: column; gap: 10px; }
 .drawer-menu-item { width: 100%; min-height: 74px; flex: none; display: flex; align-items: center; gap: 10px; padding: 10px; text-align: left; border: 1px solid var(--border); border-radius: 12px; background: var(--surface-raised); }
 .drawer-menu-icon { width: 30px; height: 30px; flex: none; display: grid; place-items: center; border: 1px solid #47361c; border-radius: 9px; background: #2b241b; }
 .drawer-menu-icon img { width: 20px; height: 20px; object-fit: contain; }
@@ -2124,11 +2124,15 @@ html, body { font-family: Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", 
 .practice-heading-actions { display:flex; align-items:center; justify-content:flex-end; gap:8px; flex:none; }
 .practice-icon-button { display:grid; place-items:center; width:32px; height:32px; padding:4px; border:0; border-radius:8px; background:transparent; color:var(--secondary); }
 .practice-icon-button img { width:24px; height:24px; object-fit:contain; }
+.practice-icon-button img.practice-bookmark-icon { width:30px; height:30px; }
+.practice-icon-button img.practice-copy-icon { width:20px; height:20px; }
 .practice-icon-button.active img { filter:brightness(0) saturate(100%) invert(69%) sepia(27%) saturate(1148%) hue-rotate(211deg) brightness(103%) contrast(101%); }
 .practice-clock { display:flex; align-items:center; gap:4px; color:var(--secondary); font-size:var(--font-body-small); white-space:nowrap; }
 .practice-clock img { width:24px; height:24px; object-fit:contain; filter:grayscale(1) brightness(1.8); }
+.practice-clock img.practice-clock-icon { width:25px; height:25px; }
 .practice-overflow { position:absolute; z-index:5; top:16px; right:24px; display:grid; place-items:center; width:44px; height:44px; padding:8px; border:0; border-radius:8px; background:var(--surface-raised); }
-.practice-overflow-dots { display:block; color:var(--secondary); font-size:18px; font-weight:700; line-height:1; letter-spacing:1px; transform:translateY(-2px); }
+.practice-overflow-dots { display:grid; place-items:center; width:24px; height:24px; }
+.practice-overflow-dots svg { display:block; width:20px; height:20px; fill:var(--secondary); }
 .practice-question-menu { position:absolute; z-index:6; top:68px; right:24px; width:168px; padding:5px; border:1px solid var(--border); border-radius:10px; background:var(--surface); box-shadow:0 10px 28px #0008; }
 .practice-question-menu button { display:block; width:100%; padding:9px 10px; border:0; border-radius:6px; background:transparent; color:var(--secondary); text-align:left; font-size:var(--font-body-tiny); }
 .practice-progress-block { margin-top:16px; }

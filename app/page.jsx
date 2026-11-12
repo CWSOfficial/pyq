@@ -1500,12 +1500,12 @@ function PracticeQuestionScreen({ question, questionIndex, questionCount, subjec
   const current = Math.min(questionIndex + 1, questionCount);
   const progress = questionCount ? Math.min(100, (current / questionCount) * 100) : 0;
   const headingActions = <div className="practice-heading-actions">
-    <button className={`practice-icon-button ${bookmarks.includes(question.prompt) ? "active" : ""}`} aria-label={bookmarks.includes(question.prompt) ? "Remove bookmark" : "Bookmark question"} onClick={toggleBookmark}><img src={figmaAsset.bookmarks} alt="" /></button>
-    <button className="practice-icon-button" aria-label="Copy question" onClick={copyQuestion}><img src="/figma-assets/copy-question.png" alt="" /></button>
-    <span className="practice-clock"><img src={figmaAsset.timer} alt="" />{formatTime(testInProgress ? seconds : practiceElapsedSeconds)}</span>
+    <button className={`practice-icon-button ${bookmarks.includes(question.prompt) ? "active" : ""}`} aria-label={bookmarks.includes(question.prompt) ? "Remove bookmark" : "Bookmark question"} onClick={toggleBookmark}><img className="practice-bookmark-icon" src={figmaAsset.bookmarks} alt="" /></button>
+    <button className="practice-icon-button" aria-label="Copy question" onClick={copyQuestion}><img className="practice-copy-icon" src="/figma-assets/copy-question.png" alt="" /></button>
+    <span className="practice-clock"><img className="practice-clock-icon" src={figmaAsset.timer} alt="" />{formatTime(testInProgress ? seconds : practiceElapsedSeconds)}</span>
   </div>;
   return <Content className={`practice-page${testInProgress ? " test-practice-page" : ""}`} title={testInProgress ? "Test Mode" : "Practice"} subtitle="" headingActions={headingActions} back={requestEndPractice}>
-    <button className="practice-overflow" aria-label="Question options" aria-expanded={showQuestionMenu} onClick={() => setShowQuestionMenu((visible) => !visible)}><span className="practice-overflow-dots" aria-hidden="true">•••</span></button>
+    <button className="practice-overflow" aria-label="Question options" aria-expanded={showQuestionMenu} onClick={() => setShowQuestionMenu((visible) => !visible)}><span className="practice-overflow-dots" aria-hidden="true"><svg viewBox="0 0 24 24"><circle cx="12" cy="5" r="2" /><circle cx="12" cy="12" r="2" /><circle cx="12" cy="19" r="2" /></svg></span></button>
     {showQuestionMenu && <div className="practice-question-menu"><button onClick={() => { setShowQuestionMenu(false); setToast("Question reported for review"); }}>Report question</button>{testInProgress && <button onClick={() => { openQuestionPalette(); setShowQuestionMenu(false); }}>Question palette</button>}</div>}
     <div className="practice-progress-block">
       <div className="practice-progress-row"><div className="practice-progress-track"><span style={{ width: `${progress}%` }} /></div><strong>{current}/{questionCount}</strong></div>

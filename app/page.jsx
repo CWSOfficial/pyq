@@ -54,6 +54,20 @@ function RichExplanation({ content }) {
   return <div className="rich-explanation">{parsed.children.map((child, index) => renderExplanationNode(child, index))}</div>;
 }
 
+function PracticeQuestionText({ content }) {
+  if (typeof content !== "string" || !content.trim()) return null;
+  if (/<\s*\/?\s*[a-z][^>]*>/i.test(content)) return <RichExplanation content={content} />;
+
+  // PYQs often embed numbered assertions in one paragraph. Put each item on
+  // its own line when the text contains a real numbered sequence.
+  const numberedItems = [...content.matchAll(/(?:^|\s)(\d{1,2})[.)]\s/g)];
+  const hasNumberedSequence = numberedItems.length > 1 && numberedItems.some((item) => item[1] === "1");
+  const formatted = hasNumberedSequence
+    ? content.replace(/\s+(?=\d{1,2}[.)]\s)/g, "\n").trim()
+    : content;
+  return <p className="practice-question-text">{formatted}</p>;
+}
+
 const navItems = ["Home", "Tests", "Bookmarks"];
 const practiceSubjectCatalog = ["Polity", "Economy", "Geography", "History", "Art and Culture", "International relations", "Science and Technology", "Environment", "Current Affairs", "Miscellaneous"];
 const subjectAliases = { "polity & governance": "Polity", "economy & social development": "Economy", "history & culture": "History", "environment & ecology": "Environment", "current affairs & ir": "Current Affairs", "science & technology": "Science and Technology" };
@@ -1500,7 +1514,7 @@ function PracticeQuestionScreen({ question, questionIndex, questionCount, subjec
     <section className="practice-question-panel" aria-label="Practice question">
       <div className="practice-question-card">
         <span className="practice-question-badge">Q.</span>
-        <div className="practice-question-copy"><RichExplanation content={question.prompt} /></div>
+        <div className="practice-question-copy"><PracticeQuestionText content={question.prompt} /></div>
       </div>
       <div className="practice-options">{question.options.map((option, index) => {
         const letter = String.fromCharCode(65 + index);

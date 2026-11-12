@@ -2204,18 +2204,42 @@ html, body { font-family: Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", 
   .practice-navigation { padding-top:8px; }
 }
 
-/* Keep the mobile app's reading scale consistent with Bookmarks: 18px page
-   titles, 14px primary labels, and 12px supporting copy. */
+/* Mobile typography follows the same semantic scale as Bookmarks. */
 @media (max-width: 899px) {
-  .phone-screen .content-page .page-heading h1 { font-size:18px; line-height:24px; }
-  .phone-screen .content-page .page-heading p { font-size:12px; line-height:16px; }
-  .phone-screen .content-page .section-heading h3 { font-size:14px; line-height:20px; }
+  .phone-screen {
+    --mobile-title-size:18px;
+    --mobile-primary-size:14px;
+    --mobile-copy-size:12px;
+  }
+  .phone-screen .content-page .page-heading h1 { font-size:var(--mobile-title-size); line-height:24px; }
+  .phone-screen .content-page .page-heading p { font-size:var(--mobile-copy-size); line-height:16px; }
+  .phone-screen .content-page :is(.section-heading h3,.analytics-strength-grid h3,.subject-performance-heading h3,.habit-summary h2,.habit-calendar-heading h2,.test-history-heading h2,.payment-history h2,.timer-presets h3) { font-size:var(--mobile-primary-size); line-height:20px; }
   .phone-screen .content-page .choice-row b,
   .phone-screen .content-page .list-card b,
-  .phone-screen .content-page .bookmark-subject b { font-size:14px; line-height:20px; }
+  .phone-screen .content-page .bookmark-subject b,
+  .phone-screen .content-page .habit-copy b,
+  .phone-screen .content-page .mistake-action b,
+  .phone-screen .content-page .subject-topic-row b,
+  .phone-screen .content-page .topic-option b,
+  .phone-screen .content-page .test-config-heading b,
+  .phone-screen .content-page .membership-support b,
+  .phone-screen .home-page :is(.action-card b,.resume-card strong,.home-note-title),
+  .phone-screen .profile-card h2,
+  .phone-screen .profile-row b { font-size:var(--mobile-primary-size); line-height:20px; }
   .phone-screen .content-page .choice-row small,
   .phone-screen .content-page .list-card small,
+  .phone-screen .content-page .habit-copy small,
+  .phone-screen .content-page .mistake-action small,
+  .phone-screen .content-page .subject-topic-row small,
+  .phone-screen .content-page .topic-option small,
   .phone-screen .content-page .bookmark-question-copy > small,
-  .phone-screen .content-page .bookmark-question-copy > span { font-size:12px; line-height:16px; }
+  .phone-screen .content-page .bookmark-question-copy > span,
+  .phone-screen .content-page .membership-support small,
+  .phone-screen .content-page :is(.page-heading p,p,small,li,label),
+  .phone-screen .home-page :is(.action-card small,.resume-card small,.home-note-copy small,.goal-title,.goal-stats small,.bottom-nav small),
+  .phone-screen .timer-page :is(.timer-modes button,.timer-duration-setting label,.timer-presets button,.meditation-tip p),
+  .phone-screen .bottom-nav small { font-size:var(--mobile-copy-size); }
+  .phone-screen .meditation-presets button b { font-size:var(--mobile-primary-size); }
+  .phone-screen .content-page :is(.primary-button,.ghost-button,.outline-button,.practice-previous,.practice-next,.habit-status,.habit-consistency) { font-size:var(--mobile-copy-size); }
 }
 

@@ -2050,6 +2050,21 @@ html, body { font-family: Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", 
 .rich-explanation strong,.rich-explanation b{font-weight:700;color:inherit}
 .rich-explanation ul,.rich-explanation ol{margin:7px 0;padding-left:18px}
 .rich-explanation li+li{margin-top:4px}
+
+/* Keep the installed mobile canvas and its absolute bottom navigation tied to
+   the visible viewport after Android browser/app back transitions. */
+@media (max-width: 600px) {
+  .app-shell {
+    height: var(--app-viewport-height, 100dvh);
+    min-height: var(--app-viewport-height, 100dvh);
+    padding: 0;
+    align-items: stretch;
+  }
+  .phone-screen {
+    height: var(--app-viewport-height, 100dvh);
+    min-height: var(--app-viewport-height, 100dvh);
+  }
+}
 .rich-explanation br{display:block;content:"";margin-top:4px}
 
 .auth-loading{display:flex;align-items:center;justify-content:center;gap:10px;color:var(--secondary);font-size:var(--font-body-tiny)}

@@ -685,6 +685,37 @@ export default function Page() {
   useEffect(() => {
     window.history.pushState({ pyqBackGuard: true }, "", window.location.href);
   }, []);
+  useEffect(() => {
+    const root = document.documentElement;
+    let scheduledFrame = 0;
+    let delayedUpdates = [];
+    const updateViewportHeight = () => {
+      const height = window.visualViewport?.height || window.innerHeight;
+      if (height > 0) root.style.setProperty("--app-viewport-height", `${Math.round(height)}px`);
+    };
+    const syncViewportHeight = () => {
+      window.cancelAnimationFrame(scheduledFrame);
+      delayedUpdates.forEach(window.clearTimeout);
+      updateViewportHeight();
+      scheduledFrame = window.requestAnimationFrame(updateViewportHeight);
+      delayedUpdates = [100, 350].map((delay) => window.setTimeout(updateViewportHeight, delay));
+    };
+    syncViewportHeight();
+    window.addEventListener("resize", syncViewportHeight);
+    window.addEventListener("orientationchange", syncViewportHeight);
+    window.addEventListener("pageshow", syncViewportHeight);
+    window.addEventListener("popstate", syncViewportHeight);
+    window.visualViewport?.addEventListener("resize", syncViewportHeight);
+    return () => {
+      window.cancelAnimationFrame(scheduledFrame);
+      delayedUpdates.forEach(window.clearTimeout);
+      window.removeEventListener("resize", syncViewportHeight);
+      window.removeEventListener("orientationchange", syncViewportHeight);
+      window.removeEventListener("pageshow", syncViewportHeight);
+      window.removeEventListener("popstate", syncViewportHeight);
+      window.visualViewport?.removeEventListener("resize", syncViewportHeight);
+    };
+  }, []);
   const toggleMusic = async () => {
     const audio = document.getElementById("pyq-background-music");
     if (!audio || !musicSettings.enabled) return setToast("Background music is currently turned off.");

@@ -4,7 +4,10 @@ import { createElement, Fragment, useEffect, useRef, useState } from "react";
 import { createClient } from "../lib/supabase/client";
 import { Lottie } from "lottie-react";
 
-const explanationTags = new Set(["p", "strong", "b", "em", "i", "ul", "ol", "li", "br"]);
+const explanationTags = new Set([
+  "p", "strong", "b", "em", "i", "ul", "ol", "li", "br",
+  "table", "caption", "thead", "tbody", "tfoot", "tr", "th", "td",
+]);
 const voidExplanationTags = new Set(["br"]);
 
 function decodeExplanationEntities(value) {
@@ -44,6 +47,10 @@ function parseExplanationMarkup(markup) {
 
 function renderExplanationNode(node, key) {
   if (typeof node === "string") return node;
+  if (node.tag === "table") {
+    return createElement("div", { key, className: "rich-table-scroll" },
+      createElement("table", null, ...node.children.map((child, index) => renderExplanationNode(child, index))));
+  }
   return createElement(node.tag, { key }, ...node.children.map((child, index) => renderExplanationNode(child, index)));
 }
 
@@ -66,6 +73,14 @@ function PracticeQuestionText({ content }) {
     ? content.replace(/\s+(?=\d{1,2}[.)]\s)/g, "\n").trim()
     : content;
   return <p className="practice-question-text">{formatted}</p>;
+}
+
+function mergeQuestionBankRows(databaseRows = [], localRows = []) {
+  const getKey = (item) => String(item.id || `${item.year}|${item.subject}|${item.question_number}|${item.prompt}`);
+  const rowsById = new Map(localRows.map((item) => [getKey(item), item]));
+  databaseRows.forEach((item) => rowsById.set(getKey(item), item));
+  return [...rowsById.values()].sort((a, b) => Number(b.year) - Number(a.year)
+    || (Number(a.question_number) || Number.MAX_SAFE_INTEGER) - (Number(b.question_number) || Number.MAX_SAFE_INTEGER));
 }
 
 function QuestionCountControl({ id, value, onChange, onDecrease, onIncrease }) {
@@ -172,6 +187,11 @@ function isDemoAdminUser(user) {
   const normalizedPhone = digits.length === 10 ? `91${digits}` : digits;
   return Boolean(user?.is_demo && (user.email === "pyqcloud@gmail.com" || DEMO_ADMIN_PHONES.has(normalizedPhone)));
 }
+function hasCompletedOnboarding(user) {
+  if (!user?.id) return false;
+  if (user.user_metadata?.onboarding_completed || readSaved(`pyq-onboarding:${user.id}`, false)) return true;
+  return Boolean(user.user_metadata?.full_name && !String(user.id).startsWith("demo-email:"));
+}
 const builtInMusicTracks = [
   { label: "Cloud Focus", url: "/audio/cloud-soft-focus.wav" },
   { label: "Evening Piano", url: "/audio/cloud-evening-piano.wav" },
@@ -261,10 +281,13 @@ export default function Page() {
   const [attemptHistory, setAttemptHistory] = useState([]);
   const [questionIndex, setQuestionIndex] = useState(0);
   const [practiceElapsedSeconds, setPracticeElapsedSeconds] = useState(0);
+  const [practiceReturnScreen, setPracticeReturnScreen] = useState("Practice by Subject");
   const [reviewQuestionPrompt, setReviewQuestionPrompt] = useState("");
   const [practiceFinished, setPracticeFinished] = useState(false);
   const [selected, setSelected] = useState(null);
   const [answerChecked, setAnswerChecked] = useState(false);
+  const [practiceSelections, setPracticeSelections] = useState({});
+  const [practiceChecks, setPracticeChecks] = useState({});
   const [eliminated, setEliminated] = useState([]);
   const [bookmarks, setBookmarks] = useState([]);
   const [mistakes, setMistakes] = useState([]);
@@ -324,7 +347,10 @@ export default function Page() {
   const reviewQuestion = reviewQuestionPrompt ? questions.find((item) => item.prompt === reviewQuestionPrompt) : null;
   const questionList = testInProgress && testQuestions.length ? testQuestions : reviewQuestion ? [reviewQuestion] : subject === "Mixed Practice" ? randomPool.slice(0, randomCount) : topicQuestions.slice(0, topicQuestionCount);
   const question = questionList[questionIndex % Math.max(questionList.length, 1)] ?? questions[0];
-  const displaySelected = testInProgress ? (testAnswers[questionIndex] ?? null) : answerChecked ? selected : null;
+  const practiceQuestionKey = String(question?.id ?? question?.prompt ?? questionIndex);
+  const currentPracticeSelection = practiceSelections[practiceQuestionKey] ?? null;
+  const currentPracticeChecked = Boolean(practiceChecks[practiceQuestionKey]);
+  const displaySelected = testInProgress ? (testAnswers[questionIndex] ?? null) : currentPracticeChecked ? currentPracticeSelection : null;
   const practiceScope = selectedTopics.length === 1 ? selectedTopics[0] : /^\d{4}$/.test(subject) ? `${subject} paper` : subject;
   const savedQuestions = bookmarks.map((prompt) => questions.find((item) => item.prompt === prompt)).filter(Boolean);
   const rawSubjectOptions = practiceCatalog?.subjects || [...practiceSubjectCatalog, ...availableSubjects];
@@ -460,7 +486,7 @@ export default function Page() {
           setAccountEmail(savedDemoUser.email || "");
           setAccountPhone(savedDemoUser.phone || "");
           setAvatarUrl(readSaved(`pyq-demo-avatar:${savedDemoUser.id}`, ""));
-          resetNavigation(savedDemoUser.user_metadata?.full_name ? "Home" : "About You");
+          resetNavigation(isDemoAdminUser(savedDemoUser) || savedDemoUser.user_metadata?.full_name || hasCompletedOnboarding(savedDemoUser) ? "Home" : "About You");
           setAuthReady(true);
           loadUserData(savedDemoUser);
         }
@@ -476,7 +502,7 @@ export default function Page() {
       setAccountEmail(sessionUser?.email ?? "");
       setAccountPhone(sessionUser?.phone ?? "");
       if (sessionUser && new URLSearchParams(window.location.search).get("next") === "/admin") window.location.replace("/admin");
-      else if (sessionUser) resetNavigation(requestedScreen === "Reset Password" ? "Reset Password" : sessionUser.user_metadata?.full_name ? "Home" : "About You");
+      else if (sessionUser) resetNavigation(requestedScreen === "Reset Password" ? "Reset Password" : isDemoAdminUser(sessionUser) || sessionUser.user_metadata?.full_name || hasCompletedOnboarding(sessionUser) ? "Home" : "About You");
       else resetNavigation(requestedScreen === "Auth" || requestedScreen === "Reset Password" ? requestedScreen : "Welcome");
       setAuthReady(true);
       loadAvatar(sessionUser);
@@ -496,7 +522,10 @@ export default function Page() {
       setAccountEmail(nextUser?.email ?? "");
       if (nextUser?.phone) setAccountPhone(nextUser.phone);
       if (_event === "PASSWORD_RECOVERY") resetNavigation("Reset Password");
-      else if (_event === "SIGNED_IN") resetNavigation(nextUser?.user_metadata?.full_name ? "Home" : "About You");
+      else if (_event === "SIGNED_IN") {
+        if (new URLSearchParams(window.location.search).get("next") === "/admin") { window.location.replace("/admin"); return; }
+        resetNavigation(isDemoAdminUser(nextUser) || nextUser?.user_metadata?.full_name || hasCompletedOnboarding(nextUser) ? "Home" : "About You");
+      }
       else if (_event === "SIGNED_OUT") resetNavigation("Welcome");
       if (_event === "SIGNED_IN" || _event === "SIGNED_OUT") setAuthReady(true);
       window.setTimeout(() => loadUserData(nextUser), 0);
@@ -539,13 +568,14 @@ export default function Page() {
       if (!active) return;
       const supabaseRows = databaseResult.data || [];
       const demoRows = AUTH_DEMO_MODE ? readSaved("pyq-demo-questions", []) : [];
-      const sourceRows = demoRows.length ? demoRows : supabaseRows;
+      const sourceRows = AUTH_DEMO_MODE ? mergeQuestionBankRows(supabaseRows, demoRows) : supabaseRows;
       setQuestions(sourceRows.map((item) => ({ ...item, year: String(item.year), tag: item.topic, answer: item.correct_option })));
     }).catch((error) => {
       if (!active) return;
-      setQuestions([]);
+      const demoRows = AUTH_DEMO_MODE ? readSaved("pyq-demo-questions", []) : [];
+      setQuestions(demoRows.map((item) => ({ ...item, year: String(item.year), tag: item.topic, answer: Number(item.correct_option) })));
       console.error("Could not load questions from Supabase", error);
-      setToast("Could not load questions from the question bank. Please try again.");
+      if (!demoRows.length) setToast("Could not load questions from the question bank. Please try again.");
     });
     const onInstall = (event) => { event.preventDefault(); setInstallPrompt(event); };
     const onInstalled = () => { setInstallPrompt(null); setIsInstalledApp(true); setToast("PYQ Cloud was added to your home screen."); };
@@ -564,6 +594,41 @@ export default function Page() {
       window.removeEventListener("appinstalled", onInstalled);
       window.removeEventListener("storage", onLocalQuestionBankChange);
       displayMode.removeEventListener?.("change", onDisplayModeChange);
+    };
+  }, []);
+  useEffect(() => {
+    let active = true;
+    const refreshQuestionBank = async () => {
+      try {
+        const rows = [];
+        const pageSize = 1000;
+        for (let offset = 0; offset < 5000; offset += pageSize) {
+          const { data, error } = await supabase.from("questions")
+            .select("id, subject, year, topic, prompt, options, correct_option, explanation, question_number")
+            .order("year", { ascending: false }).order("question_number", { ascending: true, nullsFirst: false })
+            .range(offset, offset + pageSize - 1);
+          if (error) throw error;
+          rows.push(...(data || []));
+          if ((data || []).length < pageSize) break;
+        }
+        if (active) {
+          const demoRows = AUTH_DEMO_MODE ? readSaved("pyq-demo-questions", []) : [];
+          const latestRows = AUTH_DEMO_MODE ? mergeQuestionBankRows(rows, demoRows) : rows;
+          setQuestions(latestRows.map((item) => ({ ...item, year: String(item.year), tag: item.topic, answer: item.correct_option })));
+        }
+      } catch (error) {
+        console.error("Could not refresh the question bank", error);
+      }
+    };
+    const onReturn = () => {
+      if (document.visibilityState === "visible") refreshQuestionBank();
+    };
+    window.addEventListener("focus", onReturn);
+    document.addEventListener("visibilitychange", onReturn);
+    return () => {
+      active = false;
+      window.removeEventListener("focus", onReturn);
+      document.removeEventListener("visibilitychange", onReturn);
     };
   }, []);
   useEffect(() => { if (hydrated && (!user || user.is_demo)) localStorage.setItem("pyq-bookmarks", JSON.stringify(bookmarks)); }, [bookmarks, hydrated, user]);
@@ -628,6 +693,14 @@ export default function Page() {
     const id = window.setInterval(() => setPracticeElapsedSeconds((value) => value + 1), 1000);
     return () => window.clearInterval(id);
   }, [screen, testInProgress, questionIndex]);
+  useEffect(() => {
+    if (screen !== "Practice") return;
+    const frame = window.requestAnimationFrame(() => {
+      const practicePage = document.querySelector(".practice-page");
+      if (practicePage) practicePage.scrollTop = 0;
+    });
+    return () => window.cancelAnimationFrame(frame);
+  }, [screen, questionIndex]);
   useEffect(() => {
     const savedFocusMinutes = Number(readSaved("pyq-focus-duration-minutes", 25));
     if (Number.isInteger(savedFocusMinutes) && savedFocusMinutes >= 1 && savedFocusMinutes <= 999) { setFocusMinutes(savedFocusMinutes); setTimerMinutes(savedFocusMinutes); setTimerDurationDraft(String(savedFocusMinutes)); setSeconds(savedFocusMinutes * 60); }
@@ -773,13 +846,16 @@ export default function Page() {
   const chooseAnswer = (index) => {
     if (eliminated.includes(index)) return;
     if (testInProgress) { setTestAnswers((answers) => ({ ...answers, [questionIndex]: index })); return; }
-    if (answerChecked) return;
+    if (currentPracticeChecked) return;
     setSelected(index);
+    setPracticeSelections((answers) => ({ ...answers, [practiceQuestionKey]: index }));
   };
   const checkPracticeAnswer = () => {
-    if (selected === null || answerChecked) return;
+    const answer = currentPracticeSelection ?? selected;
+    if (answer === null || currentPracticeChecked) return;
     setAnswerChecked(true);
-    recordPracticeAnswer(selected);
+    setPracticeChecks((checks) => ({ ...checks, [practiceQuestionKey]: true }));
+    recordPracticeAnswer(answer);
   };
   const eliminateOption = (index) => {
     if (eliminated.includes(index)) {
@@ -797,7 +873,7 @@ export default function Page() {
     if (!pool.length) { setToast(`No questions are available for ${scope} yet`); return; }
     const selectedQuestions = pool.slice(0, count);
     setSubject(scope); setTestQuestions(selectedQuestions); setTestAnswers({}); setTestReviewFlags([]);
-    setSubmittedTest(null); setQuestionIndex(0); setSelected(null); setAnswerChecked(false); setEliminated([]);
+    setSubmittedTest(null); setQuestionIndex(0); setSelected(null); setAnswerChecked(false); setPracticeSelections({}); setPracticeChecks({}); setEliminated([]);
     setPracticeFinished(false); setTestInProgress(true); setShowQuestionPalette(false); setShowSubmitTest(false);
     setMode("Countdown"); setSeconds(duration); setTimerRunning(true); go("Practice");
   };
@@ -981,9 +1057,10 @@ export default function Page() {
     setToast("Note deleted");
   };
   const startPractice = (name, reviewPrompt = "") => {
+    setPracticeReturnScreen(screen === "Random Practice" || screen === "Practice by Year" ? screen : "Practice by Subject");
     setReviewQuestionPrompt(reviewPrompt); setQuestionIndex(0); setSubject(name); setPracticeFinished(false);
     setPracticeElapsedSeconds(0); setTimerRunning(false); setTestInProgress(false); setTestQuestions([]); setTestAnswers({}); setTestReviewFlags([]);
-    setSelected(null); setAnswerChecked(false); setEliminated([]); setShowQuestionPalette(false); setShowSubmitTest(false);
+    setSelected(null); setAnswerChecked(false); setPracticeSelections({}); setPracticeChecks({}); setEliminated([]); setShowQuestionPalette(false); setShowSubmitTest(false);
     go("Practice");
   };
   const toggleBookmark = async () => {
@@ -1172,7 +1249,7 @@ export default function Page() {
     event.preventDefault();
     const fullName = profileName.trim();
     if (!fullName) return setToast("Enter your name to continue.");
-    const answers = { full_name: fullName, exam_attempts: aboutExamCount, target_year: aboutTargetYear };
+    const answers = { full_name: fullName, exam_attempts: aboutExamCount, target_year: aboutTargetYear, onboarding_completed: true };
     if (user && !user.is_demo) {
       const { error } = await supabase.auth.updateUser({ data: answers });
       if (error) return setToast(error.message);
@@ -1182,6 +1259,7 @@ export default function Page() {
       localStorage.setItem(DEMO_USER_KEY, JSON.stringify(updatedDemo)); setUser(updatedDemo);
     }
     localStorage.setItem("pyq-onboarding", JSON.stringify(answers));
+    if (user?.id) localStorage.setItem(`pyq-onboarding:${user.id}`, "true");
     setToast("Your profile is ready");
     go("Home");
   };
@@ -1305,19 +1383,20 @@ export default function Page() {
     {screen === "Meditation" && musicSettings.enabled && showMusicControls && <div className="music-player-controls meditation-music-controls"><button className="music-track-button" aria-label="Choose a music track" aria-expanded={showMusicPicker} onClick={() => setShowMusicPicker((visible) => !visible)}>♫</button><button className={`music-toggle ${musicPlaying ? "playing" : ""}`} aria-label={musicPlaying ? "Pause background music" : "Play background music"} onClick={toggleMusic}><span>{musicPlaying ? "Ⅱ" : "♫"}</span><small>{musicPlaying ? "Music on" : "Focus music"}</small></button>{showMusicPicker && <div className="music-track-menu" role="menu" aria-label="Music tracks">{builtInMusicTracks.map((track) => <button role="menuitem" className={musicSettings.trackUrl === track.url ? "selected" : ""} key={track.url} onClick={() => chooseMusicTrack(track)}><span>♫</span>{track.label}<small>{musicSettings.trackUrl === track.url ? "Selected" : "Play this track"}</small></button>)}</div>}</div>}
     <div className="phone-screen">
       <aside className="desktop-sidebar" aria-label="Main menu">
-        <div className="desktop-brand"><span className="desktop-brand-mark"><img src="/brand/cloud-ai-logo.png" alt="" /></span><span><b>Cloud.ai</b><small>Keep learning. Keep growing.</small></span></div>
+        <div className="desktop-brand"><span className="desktop-brand-mark"><img src="/brand/cloud-ai-logo.png" alt="" /></span><span><b><span>PYQ</span> <em>Cloud</em></b><small>Keep learning. Keep growing.</small></span></div>
         <nav className="desktop-side-nav">
           {[
             ["LEARN", [["Home", figmaAsset.home], ["Practice by Subject", figmaAsset.subject], ["Practice by Year", figmaAsset.year], ["Random Practice", figmaAsset.random], ["Mistake Book", figmaAsset.mistake], ["Tests", figmaAsset.tests], ["Bookmarks", figmaAsset.bookmarks]]],
             ["YOUR SPACE", [["Notes", figmaAsset.notes], ["Study Timer", figmaAsset.timer], ["Meditation", figmaAsset.meditation]]],
             ["YOUR GROWTH", [["My Habits", figmaAsset.habits], ["Analytics & Streak", figmaAsset.goal], ["CSR Activity", figmaAsset.social], ["My Profile", figmaAsset.profile]]],
           ].map(([group, items]) => <div className="desktop-nav-group" key={group}><small>{group}</small>{items.map(([item, asset]) => <button key={item} className={`desktop-nav-item ${screen === item || (screen === "Practice" && item === "Home") || (screen === "Mistake List" && item === "Mistake Book") ? "active" : ""}`} onClick={() => go(item)}><img src={asset} alt="" /><span>{item}</span></button>)}</div>)}
+          {user && <button className="desktop-nav-item desktop-admin-link" onClick={() => window.location.assign("/admin")}><span className="desktop-admin-icon" aria-hidden="true">⚙</span><span>Admin panel</span></button>}
         </nav>
         <div className="desktop-sidebar-bottom"><span className="desktop-plan-icon">✦</span><span><b>Free plan</b><small>Start with your next question</small></span><i>›</i></div>
       </aside>
       <header className="desktop-header">
         <div className="desktop-breadcrumb"><span>PYQ CLOUD</span><b>{screen === "Home" ? "Overview" : screen}</b></div>
-        <div className="desktop-header-actions"><span className="desktop-today">{timeGreeting}{displayName ? `, ${displayName}` : ""}</span><button className="desktop-notice" aria-label="Notifications" onClick={() => setToast("You’re all caught up") }><img src={figmaAsset.bell} alt="" /></button><button className="desktop-user" onClick={() => go("My Profile")}><img src={avatarUrl || figmaAsset.avatar} alt="" /><span>{displayName || "Enter your name"}</span><i>⌄</i></button></div>
+        <div className="desktop-header-actions"><span className="desktop-today">{timeGreeting}{displayName ? `, ${displayName}` : ""}</span><button className="desktop-notice" aria-label="Notifications" onClick={() => setToast("You’re all caught up") }><img src={figmaAsset.bell} alt="" /></button><button className="desktop-user" onClick={() => go("My Profile")}>{avatarUrl ? <img src={avatarUrl} alt={`${displayName || "Your"} profile photo`} /> : <span className="desktop-user-avatar-placeholder" aria-hidden="true"><img src={figmaAsset.profile} alt="" /></span>}<span>{displayName || "Enter your name"}</span><i>⌄</i></button></div>
       </header>
       <div className="status-bar"><span>9:41</span><img src={figmaAsset.signal} alt="" /></div>
       {screen === "Welcome" && <section className="welcome-flow">
@@ -1328,10 +1407,10 @@ export default function Page() {
       </section>}
       {screen === "Phone Auth" && <Content className="phone-auth-page" title="Continue with phone" subtitle="We’ll text you a one-time verification code." back={() => go("Welcome")} character="happy"><form className="phone-auth-form" onSubmit={sendPhoneCode}><label htmlFor="phone-number">Phone number</label><div className={`phone-number-field ${phoneNumber.replace(/^\+91/, "").length === 10 ? "valid" : ""}`}><span>+91</span><input id="phone-number" type="tel" inputMode="numeric" autoComplete="tel-national" value={phoneNumber.replace(/^\+91/, "").replace(/^(\d{5})(\d{5})$/, "$1 $2")} onChange={(event) => { let digits = event.target.value.replace(/\D/g, ""); if (digits.startsWith("0091") && digits.length > 10) digits = digits.slice(4); else if (digits.startsWith("91") && digits.length > 10) digits = digits.slice(2); else if (digits.startsWith("0") && digits.length === 11) digits = digits.slice(1); setPhoneNumber(`+91${digits.slice(0, 10)}`); }} placeholder="Enter 10-digit phone number" required /></div><small>{AUTH_DEMO_MODE ? "Local demo: enter any valid number. Use OTP 123456." : "Standard SMS charges may apply."}</small><button className="primary-button full-button" type="submit" disabled={phoneBusy || phoneNumber.replace(/^\+91/, "").length !== 10}>{phoneBusy ? "Sending code…" : "Send verification code"}</button><small className="phone-security-note"><span aria-hidden="true">♢</span> Your number is used to secure your account.</small></form></Content>}
       {screen === "Verify Phone" && <Content className="phone-auth-page verify-phone-page" title={phoneBusy ? "Verifying your number" : "Verify your number"} subtitle={phoneBusy ? "Securely checking your one-time code." : `Enter the 6-digit code sent to ${formatIndianPhone(phoneNumber)}.`} back={() => go("Phone Auth")}><form className="phone-auth-form verify-phone-form" onSubmit={verifyPhoneCode}><label htmlFor="phone-code">Verification code</label><div className={`otp-code-boxes ${phoneOtpError ? "error" : ""}`} onClick={() => document.getElementById("phone-code")?.focus()}><input id="phone-code" type="text" inputMode="numeric" autoComplete="one-time-code" maxLength={6} value={phoneCode} onChange={(event) => { setPhoneCode(event.target.value.replace(/\D/g, "").slice(0, 6)); setPhoneOtpError(false); }} aria-label="Six-digit verification code" disabled={phoneBusy} /><div aria-hidden="true">{Array.from({length:6},(_,index)=><span key={index} className={index === phoneCode.length && !phoneOtpError ? "active" : ""}>{phoneCode[index] || ""}</span>)}</div></div>{phoneOtpError && <small className="otp-error" role="alert">{phoneOtpErrorMessage}</small>}<button className="primary-button full-button" type="submit" disabled={phoneBusy || phoneCode.length !== 6}>{phoneBusy && <span className="auth-spinner" aria-hidden="true" />}{phoneBusy ? "Verifying…" : "Verify & Continue"}</button></form><button className="wrong-number-link" onClick={() => { setPhoneCode(""); setPhoneOtpError(false); setPhoneOtpErrorMessage("Incorrect code. Check the code and try again."); go("Phone Auth"); }}>Wrong number? <span>Change phone number</span></button><button className="resend-code-link" onClick={resendPhoneCode} disabled={phoneResendCountdown > 0 || phoneBusy}>{phoneResendCountdown > 0 ? `Resend code in ${formatTime(phoneResendCountdown)}` : "Didn’t get the code? Resend OTP"}</button></Content>}
-      {screen === "Phone Verified" && <section className="phone-verified-page"><div className="phone-verified-content"><div className="phone-verified-mascot" aria-hidden="true"><Lottie src="/mascot-lottie/cloudy-happy-jump.json" autoplay loop /></div><h1>Phone verified!</h1><p>Your phone number has been verified successfully.</p></div><button className="primary-button full-button" onClick={() => go(user?.user_metadata?.full_name ? "Home" : "About You")}>Continue</button></section>}
+      {screen === "Phone Verified" && <section className="phone-verified-page"><div className="phone-verified-content"><div className="phone-verified-mascot" aria-hidden="true"><Lottie src="/mascot-lottie/cloudy-happy-jump.json" autoplay loop /></div><h1>Phone verified!</h1><p>Your phone number has been verified successfully.</p></div><button className="primary-button full-button" onClick={() => go(isDemoAdminUser(user) || user?.user_metadata?.full_name || hasCompletedOnboarding(user) ? "Home" : "About You")}>Continue</button></section>}
       {screen === "Home" && <header className="topbar">
         <button className="icon-button" aria-label="Open menu" onClick={() => setDrawer(true)}><img src={figmaAsset.menu} alt="" /></button>
-        <div className="brand-word"><img src="/brand/cloud-ai-logo.png" alt="" /><span>Cloud.ai</span></div>
+        <div className="brand-word"><img src="/brand/cloud-ai-logo.png" alt="" /><span className="brand-title"><span>PYQ</span> <em>Cloud</em></span></div>
       <button className="icon-button notification" aria-label="Notifications" onClick={async () => { if (!("Notification" in window)) return setToast("Notifications aren’t supported in this browser"); const permission = await Notification.requestPermission(); setToast(permission === "granted" ? "Permission granted. Push delivery still needs setup." : "You can enable notifications in browser settings"); }}><img src={figmaAsset.bell} alt="" /></button>
       </header>}
 
@@ -1348,7 +1427,7 @@ export default function Page() {
           <span className="home-note-copy"><strong className="home-note-title">A note for you{firstName ? <>, <em>{firstName}</em></> : ""}</strong><small>Today is a new day!</small><small className="home-note-message">Every question that you practice brings you one step closer to your dream.</small></span>
         </aside>
         <button className="goal-card" onClick={(event) => go(event.target.closest(".goal-stats > span:first-child") ? "Streaks with Cloudy" : "Analytics & Streak")}>
-          <div className="goal-title"><span className="goal-icon"><img src={figmaAsset.goal} alt="" /></span><span>Daily Goal</span><b>{Math.min(analytics.today, 20)}/20 <small>Questions</small></b><span className="progress-ring"><strong>{Math.min(100, Math.round(analytics.today / 20 * 100))}%</strong></span></div>
+          <div className="goal-title"><span className="goal-icon"><img src={figmaAsset.goal} alt="" /></span><span>Daily Goal</span><b>{Math.min(analytics.today, 20)}/20 <small>Questions</small></b><span className="progress-ring" style={{ "--goal-progress": `${Math.min(100, Math.round(analytics.today / 20 * 100))}%` }}><strong>{Math.min(100, Math.round(analytics.today / 20 * 100))}%</strong></span></div>
           <div className="goal-stats"><span><b className="hot"><img src={figmaAsset.streak} alt="" /> {analytics.streak}</b><small>Day Streak</small></span><span><b className="mint"><img src={figmaAsset.solved} alt="" /> {completedQuestionCount.toLocaleString()}</b><small>Questions Solved</small></span><span><b className="rose"><img src={figmaAsset.accuracy} alt="" /> {analytics.correct}%</b><small>Accuracy</small></span></div>
         </button>
       </section>}
@@ -1362,7 +1441,7 @@ export default function Page() {
       {screen === "Random Practice" && <Content className="random-practice-page" title="Random Practice" subtitle="Challenge yourself with PYQs from all UPSC subjects." back={() => go("Home")} character="reading"><div className="random-intro">Use this mode if you are super confident about PYQs!</div><label className="random-field-label" htmlFor="random-count">Number of questions</label><QuestionCountControl id="random-count" value={randomCount} onChange={(event) => setRandomCount(Math.min(100, Math.max(5, Number(event.target.value) || 5)))} onDecrease={() => setRandomCount((value) => Math.max(5, value - 5))} onIncrease={() => setRandomCount((value) => Math.min(100, value + 5))} /><label className="attempted-toggle"><input type="checkbox" checked={includeAttempted} onChange={(event) => setIncludeAttempted(event.target.checked)} /><span>Include questions that I have already attempted.</span></label><PracticeStartButton onClick={() => startPractice("Mixed Practice")} /></Content>}
 
       {screen === "Practice" && !questionList.length && <Content title={`${subject} Practice`} subtitle="Questions are being added" back={() => setShowEndPracticeDialog(true)}><Empty icon="▤" title="No questions in this set yet" text="Try another subject or year. The PYQ Cloud question bank will appear here as the client content is loaded." /></Content>}
-      {screen === "Practice" && practiceFinished && <Content title="Practice set complete" subtitle="You have reached the end of this set." back={() => setShowEndPracticeDialog(true)}><div className="question-card practice-complete-card"><h2>Practice complete</h2><p>{questionList.length} {questionList.length === 1 ? "question was" : "questions were"} in this set. {question.isDemo ? "This was a demo question; the complete question bank has not been loaded here yet." : "Choose another set to continue practicing."}</p></div><button className="primary-button full-button" onClick={() => go("Practice by Subject")}>Choose another practice set <span>→</span></button></Content>}
+      {screen === "Practice" && practiceFinished && <Content title="Practice set complete" subtitle="You have reached the end of this set." back={() => setShowEndPracticeDialog(true)}><div className="question-card practice-complete-card"><h2>Practice complete</h2><p>{questionList.length} {questionList.length === 1 ? "question was" : "questions were"} in this set. {question.isDemo ? "This was a demo question; the complete question bank has not been loaded here yet." : "Choose another set to continue practicing."}</p></div><button className="primary-button full-button" onClick={() => go(practiceReturnScreen)}>Choose another practice set <span>→</span></button></Content>}
       {screen === "Practice" && !practiceFinished && questionList.length > 0 && <PracticeQuestionScreen
         question={question}
         questionIndex={questionIndex}
@@ -1373,9 +1452,9 @@ export default function Page() {
         formatTime={formatTime}
         practiceElapsedSeconds={practiceElapsedSeconds}
         bookmarks={bookmarks}
-        selected={selected}
+        selected={currentPracticeSelection}
         displaySelected={displaySelected}
-        answerChecked={answerChecked}
+        answerChecked={currentPracticeChecked}
         eliminated={eliminated}
         toggleBookmark={toggleBookmark}
         chooseAnswer={chooseAnswer}
@@ -1499,7 +1578,7 @@ export default function Page() {
 
       {screen === "Analytics & Streak" && <Content className="analytics-page" title="Analytics" subtitle="Track your learning journey." back={() => go("Home")}><div className="analytics-completed-card"><div><small>PYQs Completed</small><strong>{completedQuestionCount.toLocaleString()} <span>/ {questions.length.toLocaleString()}</span></strong></div><b>{completedPercent}%</b><div className="analytics-progress"><span style={{width:`${completedPercent}%`}} /></div></div><div className="analytics-summary-grid"><div className="analytics-stat-card"><span>▥</span><small>Incorrect Answers</small><b>{Math.max(0,analytics.attempted-analytics.correctCount).toLocaleString()}</b><em>Keep reviewing to improve!</em><i className="pink-progress" /></div><div className="analytics-stat-card"><span>◌</span><small>Overall Accuracy</small><b>{analytics.correct}%</b><em>{analytics.attempted ? "Good job! Keep it up!" : "Start a practice session"}</em><i className="green-progress" /></div></div><div className="analytics-strength-grid"><section><h3><span>♧</span> Strongest</h3>{strongestSubjects.length ? strongestSubjects.map((item) => <div key={item.name}><span>{item.name}</span><b>{item.accuracy}%</b></div>) : <p>Your strongest subjects will appear after practice.</p>}</section><section><h3><span>✦</span> Needs Attention</h3>{attentionSubjects.length ? attentionSubjects.map((item) => <div key={item.name}><span>{item.name}</span><b>{item.accuracy}%</b></div>) : <p>Practice another subject to compare your results.</p>}</section></div><section className="subject-performance"><div className="subject-performance-heading"><h3>Subject Performance</h3><button onClick={() => setToast("Showing all available subjects")}>View all ›</button></div><div className="subject-performance-columns"><span>SUBJECT</span><span>COMPLETION</span><span>ACCURACY</span></div>{subjectPerformance.length ? subjectPerformance.map((item) => <div className="subject-performance-row" key={item.name}><span><i>♧</i>{item.name}</span><div><small>{item.completion}%</small><b><i style={{width:`${item.completion}%`}} /></b></div><strong>{item.attempted ? `${item.accuracy}%` : "—"}</strong></div>) : <p className="subject-performance-empty">Questions and results will appear here after your first practice session.</p>}</section>{showStreakDetails && <div className="analytics-modal-backdrop" onClick={() => setShowStreakDetails(false)}><section className="streak-details-modal" onClick={(event) => event.stopPropagation()}><button className="analytics-close" aria-label="Close streak details" onClick={() => setShowStreakDetails(false)}>×</button><div className="streak-modal-heading"><span className="streak-cloud">☁</span><div><h2>Streaks with Cloudy</h2><p>Keep your streak alive!</p></div></div><div className="streak-current-card"><div><small>Current Streak</small><strong>{analytics.streak} <span>days</span></strong><p>Keep it going{displayName ? `, ${displayName}` : ""}! 👋</p></div><div><small>Best streak</small><b>{analytics.bestStreak} days</b></div><div className="streak-week">{Array.from({length:7},(_,index)=>{const date=new Date();date.setDate(date.getDate()-(6-index));const dayKey=date.toLocaleDateString("en-CA");const completed=qualifiesForStreak(attemptHistory, dayKey);return <span key={dayKey} className={completed?"done":""}><i>{completed?"✓":"○"}</i><small>{index===6?"Today":date.toLocaleDateString("en-US",{weekday:"short"})}</small></span>;})}</div></div><div className="streak-how-card"><b>♧ &nbsp; How streak works</b><p>Your streak counts days when you practice 15 questions or more every day.</p><small>• Complete 15 or more questions in a day to keep your streak alive.</small><small>• If you miss a day, your streak resets to 0.</small></div></section></div>}</Content>}
 
-      {screen === "Streaks with Cloudy" && <Content className="streak-page" title="Streaks with Cloudy" subtitle="Keep your streak alive!" back={() => go("Home")} character="happy"><button className="streak-info-button" aria-label="How streaks work" onClick={() => setToast("Practice 15 or more questions each day to keep your streak")}>ⓘ</button><section className="streak-current-card"><div className="streak-card-top"><div><small>Current Streak</small><strong>{analytics.streak} <span>days</span></strong><p>Keep it going{displayName ? `, ${displayName}` : ""}! 👋</p></div><div><small>Best streak</small><b>{analytics.bestStreak} days</b></div></div><div className="streak-week">{Array.from({length:7},(_,index)=>{const date=new Date();date.setDate(date.getDate()-(6-index));const dayKey=date.toLocaleDateString("en-CA");const completed=qualifiesForStreak(attemptHistory, dayKey);return <span key={dayKey} className={completed?"done":""}><i>{completed?"✓":"○"}</i><small>{index===6?"Today":date.toLocaleDateString("en-US",{weekday:"short"})}</small></span>;})}</div></section><section className="streak-how-card"><b>♧ &nbsp; How streak works</b><p>Your streak is counted as days when you practice <strong>15 questions or more everyday.</strong></p><small>• Complete 15 or more questions in a day to keep your streak alive.</small><small>• If you miss a day, your streak resets to 0.</small></section></Content>}
+      {screen === "Streaks with Cloudy" && <Content className="streak-page" title="Streak" subtitle="Track your learning journey." back={() => go("Home")} character="happy"><button className="streak-info-button" aria-label="How streaks work" onClick={() => setToast("Practice 15 or more questions each day to keep your streak")}>ⓘ</button><section className="streak-current-card"><div className="streak-card-top"><div><small><img className="streak-metric-icon" src="/streak-assets/flame.png" alt="" />Current Streak</small><strong>{analytics.streak} <span>days</span></strong><p>Keep it going{displayName ? `, ${displayName}` : ""}! ✨</p></div><div><small><img className="streak-metric-icon" src="/streak-assets/flame.png" alt="" />{analytics.bestStreak} days</small><b>Best Streak</b></div></div><div className="streak-week">{Array.from({length:7},(_,index)=>{const date=new Date();date.setDate(date.getDate()-(6-index));const dayKey=date.toLocaleDateString("en-CA");const completed=qualifiesForStreak(attemptHistory, dayKey);return <span key={dayKey} className={completed?"done":""}><i>✓</i><small>{index===6?"Today":date.toLocaleDateString("en-US",{weekday:"short"})}</small></span>;})}</div></section><section className="streak-how-card"><span className="streak-how-icon" aria-hidden="true"><img src="/streak-assets/chart.png" alt="" /></span><div className="streak-how-copy"><b>How streak works</b><p>Your streak is counted as valid when you practice <strong>15 questions or more everyday.</strong></p><hr aria-hidden="true" /><small>Complete 15 or more questions in a day to keep your streak alive.</small><small>If you miss a day, your streak resets to 0.</small></div><img className="streak-how-illustration" src="/streak-assets/clipboard.png" alt="" /></section></Content>}
       {screen === "CSR Activity" && <Content className="impact-page" title="" subtitle="" back={() => go("Home")}><div className="impact-title"><span>♡</span><h1>Social Impact</h1></div><div className="impact-info-card">{[["♧","How it works","A portion of app’s revenue goes towards funding the education of underprivileged children."],["♧","100% Transparent","We are committed to publish every transaction and donation receipt on our website."],["♧","Partner Organizations","We donate only to government-registered NGOs and Orphanages."]].map(([glyph,title,description])=><div className="impact-info-row" key={title}><span>{glyph}</span><div><b>{title}</b><p>{description}</p></div></div>)}</div><section className="impact-founder-card"><span className="impact-quote-mark">“</span><h2>Note from the Founder</h2><p>As UPSC aspirants, we all dream of serving the nation someday. But service doesn’t have to wait. For you, it’s simply subscribing to the app and practicing PYQs. Behind the scenes, a portion of our revenue helps fund the education of those who cannot afford it. Please visit our website for more information.</p><div><span>♡</span><small>With love and care,<b>Vimanyu Chaturvedi.</b></small></div></section><button className="impact-website-button" onClick={() => setToast("Website link will be added by the client")}>Visit our website <span>↗</span></button></Content>}
 
       {screen === "About You" && <Content className="about-you-page" title="A little about you" subtitle="We’ll tailor your UPSC preparation to your goals." back={() => go("Welcome")} character><form className="about-you-form" onSubmit={saveAboutYou}><label className="about-name-field" htmlFor="about-name">Your name<span className="about-input-wrap"><img src={figmaAsset.profile} alt="" /><input id="about-name" value={profileName} onChange={(event) => setProfileName(event.target.value)} placeholder="Enter your name" maxLength={80} required /></span></label><fieldset><legend>How many attempts have you taken?</legend><div className="about-choice-row">{["0", "1", "2", "3+"].map((value) => <button type="button" key={value} className={aboutExamCount === value ? "selected" : ""} onClick={() => setAboutExamCount(value)}>{value}</button>)}</div></fieldset><label className="about-year-field">Target exam year<span className="about-input-wrap"><span aria-hidden="true">▣</span><select value={aboutTargetYear} onChange={(event) => setAboutTargetYear(event.target.value)}><option value="">Select your target year</option>{designYears.slice(0, 10).map((year) => <option key={year}>{year}</option>)}</select></span></label><div className="about-tip"><span>✦</span><p><b>Made for your preparation</b><small>Your selections help personalize your study recommendations and progress.</small></p></div><button className="primary-button full-button" type="submit">Start My Preparation</button></form></Content>}
@@ -1527,7 +1606,7 @@ export default function Page() {
           ["Meditation", figmaAsset.meditation, "Breathe in and let it go :)"],
           ["My Habits", figmaAsset.habits, "Stay consistent with your goals."],
           ["Social Impact", figmaAsset.social, "Your learning makes a difference."],
-        ].map(([item, asset, subtitle]) => <button className={`drawer-menu-item ${screen === item || (item === "Social Impact" && screen === "CSR Activity") ? "active" : ""}`} key={item} onClick={() => item === "Social Impact" ? go("CSR Activity") : go(item)}><span className="drawer-menu-icon"><img src={asset} alt="" /></span><span className="drawer-menu-copy"><b>{item}</b><small>{subtitle}</small></span><i>›</i></button>)}{!isInstalledApp && <button className="drawer-menu-item" onClick={() => { setDrawer(false); installApp(); }}><span className="drawer-menu-icon" aria-hidden="true">↓</span><span className="drawer-menu-copy"><b>Install app</b><small>Add PYQ Cloud to your home screen.</small></span><i>›</i></button>}{user && isInstalledApp && (!user.is_demo || isDemoAdminUser(user)) && <button className="drawer-menu-item" onClick={() => window.location.assign("/admin")}><span className="drawer-menu-icon" aria-hidden="true">⚙</span><span className="drawer-menu-copy"><b>Admin panel</b><small>Manage the question bank.</small></span><i>›</i></button>}</div>
+        ].map(([item, asset, subtitle]) => <button className={`drawer-menu-item ${screen === item || (item === "Social Impact" && screen === "CSR Activity") ? "active" : ""}`} key={item} onClick={() => item === "Social Impact" ? go("CSR Activity") : go(item)}><span className="drawer-menu-icon"><img src={asset} alt="" /></span><span className="drawer-menu-copy"><b>{item}</b><small>{subtitle}</small></span><i>›</i></button>)}{!isInstalledApp && <button className="drawer-menu-item" onClick={() => { setDrawer(false); installApp(); }}><span className="drawer-menu-icon" aria-hidden="true">↓</span><span className="drawer-menu-copy"><b>Install app</b><small>Add PYQ Cloud to your home screen.</small></span><i>›</i></button>}{user && <button className="drawer-menu-item" onClick={() => window.location.assign("/admin")}><span className="drawer-menu-icon" aria-hidden="true">⚙</span><span className="drawer-menu-copy"><b>Admin panel</b><small>Manage the question bank.</small></span><i>›</i></button>}</div>
       </aside></div>}
       {showEndPracticeDialog && <div className="test-overlay practice-exit-overlay" role="presentation" onClick={() => setShowEndPracticeDialog(false)}><section className="test-dialog practice-exit-dialog" role="dialog" aria-modal="true" aria-labelledby="end-practice-title" onClick={(event) => event.stopPropagation()}><header><div><h2 id="end-practice-title">{testInProgress ? "End this test?" : "End this practice?"}</h2><p>{testInProgress ? "Your test session will end and you’ll return to the previous screen." : "Your current practice will end and you’ll return to the previous screen."}</p></div></header><div className="submit-test-actions"><button className="ghost-button" onClick={() => setShowEndPracticeDialog(false)}>No, continue</button><button className="primary-button" onClick={confirmEndPractice}>{testInProgress ? "Yes, end test" : "Yes, end practice"}</button></div></section></div>}
       {toast && <div className="toast" role="status">{toast}</div>}
@@ -1568,8 +1647,9 @@ function PracticeQuestionScreen({ question, questionIndex, questionCount, subjec
   const topic = question.topic || question.tag || "General";
   const current = Math.min(questionIndex + 1, questionCount);
   const progress = questionCount ? Math.min(100, (current / questionCount) * 100) : 0;
+  const bookmarked = bookmarks.includes(question.prompt);
   const headingActions = <div className="practice-heading-actions">
-    <button className={`practice-icon-button ${bookmarks.includes(question.prompt) ? "active" : ""}`} aria-label={bookmarks.includes(question.prompt) ? "Remove bookmark" : "Bookmark question"} onClick={toggleBookmark}><img className="practice-bookmark-icon" src={figmaAsset.bookmarks} alt="" /></button>
+    <button className={`practice-icon-button ${bookmarked ? "active" : ""}`} aria-label={bookmarked ? "Remove bookmark" : "Bookmark question"} aria-pressed={bookmarked} onClick={toggleBookmark}><svg className="practice-bookmark-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M6.5 4.5h11a1 1 0 0 1 1 1v14L12 15.7l-6.5 3.8v-14a1 1 0 0 1 1-1Z" fill={bookmarked ? "currentColor" : "none"} stroke="currentColor" strokeWidth="1.6" strokeLinejoin="round" /></svg></button>
     <button className="practice-icon-button" aria-label="Copy question" onClick={copyQuestion}><img className="practice-copy-icon" src="/figma-assets/copy-question.png" alt="" /></button>
     <span className="practice-clock"><img className="practice-clock-icon" src={figmaAsset.timer} alt="" />{formatTime(testInProgress ? seconds : practiceElapsedSeconds)}</span>
   </div>;

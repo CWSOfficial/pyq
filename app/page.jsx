@@ -163,6 +163,7 @@ function summarizeAttempts(attempts) {
 }
 
 const supabase = createClient();
+const unauthenticatedScreens = new Set(["Welcome", "Auth", "Phone Auth", "Verify Phone", "Auth Confirmation", "Reset Password", "Reset Email Sent"]);
 function hasCompletedOnboarding(user) {
   if (!user?.id) return false;
   return Boolean(user.user_metadata?.onboarding_completed);
@@ -646,6 +647,9 @@ export default function Page() {
     screenRef.current = next;
     setScreen(next);
   };
+  useEffect(() => {
+    if (authReady && !user && !unauthenticatedScreens.has(screen)) resetNavigation("Welcome");
+  }, [authReady, user, screen]);
   const go = (next) => {
     const current = screenRef.current;
     if (next !== current) {
@@ -1092,7 +1096,14 @@ export default function Page() {
       setPhoneOtpErrorMessage("Incorrect code. Check the code and try again.");
       setPhoneResendCountdown(30);
       go("Verify Phone");
-    } catch (error) { setToast(error.message || "Could not send a code. Check the phone provider setup."); }
+    } catch (error) {
+      const message = String(error?.message || "");
+      if (/unsupported phone provider|phone provider.*disabled/i.test(message)) {
+        setToast("Phone sign-in is disabled in Supabase Auth. Enable the Phone provider and configure SMS or test phone numbers.");
+      } else if (/sms provider.*(not configured|missing)|no sms provider/i.test(message)) {
+        setToast("Supabase has no SMS provider configured. Add an SMS provider, or add this number to Supabase Auth test phone numbers.");
+      } else setToast(message || "Could not send a code. Check the phone provider setup.");
+    }
     finally { setPhoneBusy(false); }
   };
   const verifyPhoneCode = async (event) => {
@@ -1231,12 +1242,13 @@ export default function Page() {
   const referralCode = user?.user_metadata?.referral_code || (user?.id ? `PYQ${user.id.replace(/-/g, "").slice(0, 6).toUpperCase()}` : "PYQCLOUD");
 
   if (!authReady) return <main className="app-shell"><div className="phone-screen auth-loading" role="status" aria-live="polite"><span className="auth-spinner" aria-hidden="true" />Restoring your session…</div></main>;
+  if (!user && !unauthenticatedScreens.has(screen)) return <main className="app-shell"><div className="phone-screen auth-loading" role="status" aria-live="polite"><span className="auth-spinner" aria-hidden="true" />Returning to sign in…</div></main>;
 
   return <main className="app-shell">
     <audio id="pyq-background-music" src={musicSettings.trackUrl || "/audio/pyq-focus.wav"} loop preload="none" onEnded={() => setMusicPlaying(false)} />
     {screen === "Meditation" && musicSettings.enabled && showMusicControls && <div className="music-player-controls meditation-music-controls"><button className="music-track-button" aria-label="Choose a music track" aria-expanded={showMusicPicker} onClick={() => setShowMusicPicker((visible) => !visible)}>♫</button><button className={`music-toggle ${musicPlaying ? "playing" : ""}`} aria-label={musicPlaying ? "Pause background music" : "Play background music"} onClick={toggleMusic}><span>{musicPlaying ? "Ⅱ" : "♫"}</span><small>{musicPlaying ? "Music on" : "Focus music"}</small></button>{showMusicPicker && <div className="music-track-menu" role="menu" aria-label="Music tracks">{builtInMusicTracks.map((track) => <button role="menuitem" className={musicSettings.trackUrl === track.url ? "selected" : ""} key={track.url} onClick={() => chooseMusicTrack(track)}><span>♫</span>{track.label}<small>{musicSettings.trackUrl === track.url ? "Selected" : "Play this track"}</small></button>)}</div>}</div>}
     <div className="phone-screen">
-      <aside className="desktop-sidebar" aria-label="Main menu">
+      {user && <aside className="desktop-sidebar" aria-label="Main menu">
         <div className="desktop-brand"><span className="desktop-brand-mark"><img src="/brand/cloud-ai-logo.png" alt="" /></span><span><b><span>PYQ</span> <em>Cloud</em></b><small>Keep learning. Keep growing.</small></span></div>
         <nav className="desktop-side-nav">
           {[
@@ -1247,11 +1259,11 @@ export default function Page() {
           {user && <button className="desktop-nav-item desktop-admin-link" onClick={() => window.location.assign("/admin")}><span className="desktop-admin-icon" aria-hidden="true">⚙</span><span>Admin panel</span></button>}
         </nav>
         <div className="desktop-sidebar-bottom"><span className="desktop-plan-icon">✦</span><span><b>Free plan</b><small>Start with your next question</small></span><i>›</i></div>
-      </aside>
-      <header className="desktop-header">
+      </aside>}
+      {user && <header className="desktop-header">
         <div className="desktop-breadcrumb"><span>PYQ CLOUD</span><b>{screen === "Home" ? "Overview" : screen}</b></div>
         <div className="desktop-header-actions"><span className="desktop-today">{timeGreeting}{displayName ? `, ${displayName}` : ""}</span><button className="desktop-notice" aria-label="Notifications" onClick={() => setToast("You’re all caught up") }><img src={figmaAsset.bell} alt="" /></button><button className="desktop-user" onClick={() => go("My Profile")}>{avatarUrl ? <img src={avatarUrl} alt={`${displayName || "Your"} profile photo`} /> : <span className="desktop-user-avatar-placeholder" aria-hidden="true"><img src={figmaAsset.profile} alt="" /></span>}<span>{displayName || "Enter your name"}</span><i>⌄</i></button></div>
-      </header>
+      </header>}
       <div className="status-bar"><span>9:41</span><img src={figmaAsset.signal} alt="" /></div>
       {screen === "Welcome" && <section className="welcome-flow">
         <div className="welcome-brand"><img className="welcome-mascot" src="/figma-assets-oct-2026/cloud-logo-transparent.png" alt="" /><div className="welcome-logotype">PYQ <span>Cloud</span></div></div>
@@ -1259,7 +1271,7 @@ export default function Page() {
         <div className="welcome-feature-row">{[[figmaAsset.subject, "PYQs"], [figmaAsset.habits, "Habits"], [figmaAsset.notes, "Notes"], [figmaAsset.meditation, "Meditation"]].map(([asset, label], index) => <Fragment key={label}>{index === 1 && <i aria-hidden="true">+</i>}<span className={index === 0 ? "featured" : ""}><img src={asset} alt="" />{label}</span></Fragment>)}</div>
         <div className="welcome-actions"><strong>Get started</strong><button className="google-auth-button" onClick={signInWithGoogle}><span className="google-g" aria-hidden="true"><svg viewBox="0 0 48 48"><path fill="#4285F4" d="M43.6 24.5c0-1.4-.1-2.8-.4-4.1H24v7.8h11c-.5 2.6-2 4.9-4.3 6.4v5.3h7c4.1-3.8 6.5-9.3 6.5-15.4z"/><path fill="#34A853" d="M24 44c5.9 0 10.8-2 14.4-5.4l-7-5.3c-1.9 1.3-4.4 2-7.4 2-5.7 0-10.5-3.8-12.2-9H4.6v5.5C8.2 39.3 15.5 44 24 44z"/><path fill="#FBBC05" d="M11.8 26.3c-.4-1.3-.7-2.7-.7-4.3s.2-3 .7-4.3v-5.5H4.6C3.1 15.2 2.2 18.4 2.2 22s.9 6.8 2.4 9.8l7.2-5.5z"/><path fill="#EA4335" d="M24 10.7c3.2 0 6 1.1 8.2 3.2l6.1-6.1C34.8 4.4 29.9 2 24 2 15.5 2 8.2 6.7 4.6 13.8l7.2 5.5c1.7-5.2 6.5-8.6 12.2-8.6z"/></svg></span>Continue with Google</button><button className="phone-auth-button" onClick={() => go("Phone Auth")}><span aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M6.6 10.8c1.4 2.8 3.8 5.2 6.6 6.6l2.2-2.2c.3-.3.7-.4 1.1-.3 1.2.4 2.5.6 3.8.6.6 0 1 .4 1 1V20c0 .6-.4 1-1 1C10 21 3 14 3 5c0-.6.4-1 1-1h3.5c.6 0 1 .4 1 1 0 1.3.2 2.6.6 3.8.1.4 0 .8-.3 1.1z"/></svg></span>Continue with Phone</button><button className="welcome-email-link" onClick={() => { setAuthMode("signin"); setAuthError(""); setAuthNotice(""); go("Auth"); }}>Sign in or create an account with email</button><small>By continuing, you agree to our <button onClick={() => setToast("Terms and privacy details will be added by the client.")}>Terms &amp; Privacy Policy.</button></small></div>
       </section>}
-      {screen === "Phone Auth" && <Content className="phone-auth-page" title="Continue with phone" subtitle="We’ll text you a one-time verification code." back={() => go("Welcome")} character="happy"><form className="phone-auth-form" onSubmit={sendPhoneCode}><label htmlFor="phone-number">Phone number</label><div className={`phone-number-field ${phoneNumber.replace(/^\+91/, "").length === 10 ? "valid" : ""}`}><span>+91</span><input id="phone-number" type="tel" inputMode="numeric" autoComplete="tel-national" value={phoneNumber.replace(/^\+91/, "").replace(/^(\d{5})(\d{5})$/, "$1 $2")} onChange={(event) => { let digits = event.target.value.replace(/\D/g, ""); if (digits.startsWith("0091") && digits.length > 10) digits = digits.slice(4); else if (digits.startsWith("91") && digits.length > 10) digits = digits.slice(2); else if (digits.startsWith("0") && digits.length === 11) digits = digits.slice(1); setPhoneNumber(`+91${digits.slice(0, 10)}`); }} placeholder="Enter 10-digit phone number" required /></div><small>Use OTP 123456 for Supabase test phone numbers.</small><button className="primary-button full-button" type="submit" disabled={phoneBusy || phoneNumber.replace(/^\+91/, "").length !== 10}>{phoneBusy ? "Sending code…" : "Send verification code"}</button><small className="phone-security-note"><span aria-hidden="true">♢</span> Your number is used to secure your account.</small></form></Content>}
+      {screen === "Phone Auth" && <Content className="phone-auth-page" title="Continue with phone" subtitle="We’ll text you a one-time verification code." back={() => go("Welcome")} character="happy"><form className="phone-auth-form" onSubmit={sendPhoneCode}><label htmlFor="phone-number">Phone number</label><div className={`phone-number-field ${phoneNumber.replace(/^\+91/, "").length === 10 ? "valid" : ""}`}><span>+91</span><input id="phone-number" type="tel" inputMode="numeric" autoComplete="tel-national" value={phoneNumber.replace(/^\+91/, "").replace(/^(\d{5})(\d{5})$/, "$1 $2")} onChange={(event) => { let digits = event.target.value.replace(/\D/g, ""); if (digits.startsWith("0091") && digits.length > 10) digits = digits.slice(4); else if (digits.startsWith("91") && digits.length > 10) digits = digits.slice(2); else if (digits.startsWith("0") && digits.length === 11) digits = digits.slice(1); setPhoneNumber(`+91${digits.slice(0, 10)}`); }} placeholder="Enter 10-digit phone number" required /></div><small>123456 works only for numbers added to Supabase Auth test phone numbers.</small><button className="primary-button full-button" type="submit" disabled={phoneBusy || phoneNumber.replace(/^\+91/, "").length !== 10}>{phoneBusy ? "Sending code…" : "Send verification code"}</button><small className="phone-security-note"><span aria-hidden="true">♢</span> Your number is used to secure your account.</small></form></Content>}
       {screen === "Verify Phone" && <Content className="phone-auth-page verify-phone-page" title={phoneBusy ? "Verifying your number" : "Verify your number"} subtitle={phoneBusy ? "Securely checking your one-time code." : `Enter the 6-digit code sent to ${formatIndianPhone(phoneNumber)}.`} back={() => go("Phone Auth")}><form className="phone-auth-form verify-phone-form" onSubmit={verifyPhoneCode}><label htmlFor="phone-code">Verification code</label><div className={`otp-code-boxes ${phoneOtpError ? "error" : ""}`} onClick={() => document.getElementById("phone-code")?.focus()}><input id="phone-code" type="text" inputMode="numeric" autoComplete="one-time-code" maxLength={6} value={phoneCode} onChange={(event) => { setPhoneCode(event.target.value.replace(/\D/g, "").slice(0, 6)); setPhoneOtpError(false); }} aria-label="Six-digit verification code" disabled={phoneBusy} /><div aria-hidden="true">{Array.from({length:6},(_,index)=><span key={index} className={index === phoneCode.length && !phoneOtpError ? "active" : ""}>{phoneCode[index] || ""}</span>)}</div></div>{phoneOtpError && <small className="otp-error" role="alert">{phoneOtpErrorMessage}</small>}<button className="primary-button full-button" type="submit" disabled={phoneBusy || phoneCode.length !== 6}>{phoneBusy && <span className="auth-spinner" aria-hidden="true" />}{phoneBusy ? "Verifying…" : "Verify & Continue"}</button></form><button className="wrong-number-link" onClick={() => { setPhoneCode(""); setPhoneOtpError(false); setPhoneOtpErrorMessage("Incorrect code. Check the code and try again."); go("Phone Auth"); }}>Wrong number? <span>Change phone number</span></button><button className="resend-code-link" onClick={resendPhoneCode} disabled={phoneResendCountdown > 0 || phoneBusy}>{phoneResendCountdown > 0 ? `Resend code in ${formatTime(phoneResendCountdown)}` : "Didn’t get the code? Resend OTP"}</button></Content>}
       {screen === "Phone Verified" && <section className="phone-verified-page"><div className="phone-verified-content"><div className="phone-verified-mascot" aria-hidden="true"><Lottie src="/mascot-lottie/cloudy-happy-jump.json" autoplay loop /></div><h1>Phone verified!</h1><p>Your phone number has been verified successfully.</p></div><button className="primary-button full-button" onClick={() => go(hasCompletedOnboarding(user) ? "Home" : "About You")}>Continue</button></section>}
       {screen === "Home" && <header className="topbar">

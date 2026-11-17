@@ -83,10 +83,10 @@ function mergeQuestionBankRows(databaseRows = [], localRows = []) {
     || (Number(a.question_number) || Number.MAX_SAFE_INTEGER) - (Number(b.question_number) || Number.MAX_SAFE_INTEGER));
 }
 
-function QuestionCountControl({ id, value, onChange, onDecrease, onIncrease }) {
+function QuestionCountControl({ id, value, onChange, onDecrease, onIncrease, max = 100 }) {
   return <span className="random-count-control question-count-control">
     <button type="button" aria-label="Decrease question count" onClick={onDecrease}>−</button>
-    <input id={id} type="number" min="5" max="100" value={value} onChange={onChange} />
+    <input id={id} type="number" min="5" max={max} value={value} onChange={onChange} />
     <button type="button" aria-label="Increase question count" onClick={onIncrease}>＋</button>
   </span>;
 }
@@ -345,7 +345,7 @@ export default function Page() {
   const randomPool = includeAttempted ? matchingQuestions : matchingQuestions.filter((item) => !attemptedIds.has(item.id));
   const topicQuestions = selectedTopics.length ? matchingQuestions.filter((item) => selectedTopics.includes(displayTopic(item.topic || item.tag))) : matchingQuestions;
   const reviewQuestion = reviewQuestionPrompt ? questions.find((item) => item.prompt === reviewQuestionPrompt) : null;
-  const questionList = testInProgress && testQuestions.length ? testQuestions : reviewQuestion ? [reviewQuestion] : subject === "Mixed Practice" ? randomPool.slice(0, randomCount) : topicQuestions.slice(0, topicQuestionCount);
+  const questionList = testInProgress && testQuestions.length ? testQuestions : reviewQuestion ? [reviewQuestion] : subject === "Mixed Practice" ? randomPool.slice(0, randomCount) : /^\d{4}$/.test(subject) ? topicQuestions : topicQuestions.slice(0, topicQuestionCount);
   const question = questionList[questionIndex % Math.max(questionList.length, 1)] ?? questions[0];
   const practiceQuestionKey = String(question?.id ?? question?.prompt ?? questionIndex);
   const currentPracticeSelection = practiceSelections[practiceQuestionKey] ?? null;
@@ -533,7 +533,7 @@ export default function Page() {
     const databaseQuestions = (async () => {
       const rows = [];
       const pageSize = 1000;
-      for (let offset = 0; offset < 5000; offset += pageSize) {
+      for (let offset = 0; ; offset += pageSize) {
         const { data, error } = await supabase.from("questions")
           .select("id, subject, year, topic, prompt, options, correct_option, explanation, question_number")
           .order("year", { ascending: false }).order("question_number", { ascending: true, nullsFirst: false })
@@ -602,7 +602,7 @@ export default function Page() {
       try {
         const rows = [];
         const pageSize = 1000;
-        for (let offset = 0; offset < 5000; offset += pageSize) {
+        for (let offset = 0; ; offset += pageSize) {
           const { data, error } = await supabase.from("questions")
             .select("id, subject, year, topic, prompt, options, correct_option, explanation, question_number")
             .order("year", { ascending: false }).order("question_number", { ascending: true, nullsFirst: false })
@@ -1432,9 +1432,9 @@ export default function Page() {
         </button>
       </section>}
 
-      {screen === "Practice by Subject" && <Content title="Practice by Subject" subtitle="Master one subject at a time." back={() => go("Home")} character="reading"><div className="choice-list">{subjectPickerOptions.map((item, i) => <button key={item} className="choice-row subject-topic-row" onClick={() => { setSubject(item); setSelectedTopics([]); setTopicQuestionCount(25); go("Subject Topics"); }}><span className={`subject-glyph hue-${i % subjectIcons.length}`}><img src={subjectIcons[i % subjectIcons.length]} alt="" /></span><span><b>{item}</b><small>{questions.filter((question) => canonicalSubject(question.subject) === canonicalSubject(item)).length} Questions</small></span><span className="chevron">›</span></button>)}</div></Content>}
+      {screen === "Practice by Subject" && <Content title="Practice by Subject" subtitle="Master one subject at a time." back={() => go("Home")} character="reading"><div className="choice-list">{subjectPickerOptions.map((item, i) => <button key={item} className="choice-row subject-topic-row" onClick={() => { setSubject(item); setSelectedTopics([]); setTopicQuestionCount(Math.max(5, questions.filter((question) => canonicalSubject(question.subject) === canonicalSubject(item)).length)); go("Subject Topics"); }}><span className={`subject-glyph hue-${i % subjectIcons.length}`}><img src={subjectIcons[i % subjectIcons.length]} alt="" /></span><span><b>{item}</b><small>{questions.filter((question) => canonicalSubject(question.subject) === canonicalSubject(item)).length} Questions</small></span><span className="chevron">›</span></button>)}</div></Content>}
 
-      {screen === "Subject Topics" && <Content title={subject} subtitle="Choose the topics you want to focus on." back={() => go("Practice by Subject")} character="reading"><label className="topic-option topic-select-all"><input type="checkbox" checked={subjectTopics.length > 0 && selectedTopics.length === subjectTopics.length} onChange={(event) => setSelectedTopics(event.target.checked ? subjectTopics : [])} /><span>Select all</span></label><div className="topic-list">{subjectTopics.map((topic) => { const topicQuestions = questions.filter((item) => canonicalSubject(item.subject) === canonicalSubject(subject) && displayTopic(item.topic || item.tag) === topic); const attempted = topicQuestions.filter((item) => attemptedIds.has(item.id)).length; return <label className="topic-option" key={topic}><input type="checkbox" checked={selectedTopics.includes(topic)} onChange={() => setSelectedTopics((items) => items.includes(topic) ? items.filter((item) => item !== topic) : [...items, topic])} /><span><b>{topic}</b><small>{attempted} of {topicQuestions.length} attempted</small></span></label>; })}{!subjectTopics.length && <Empty icon="▤" title="No topics available" text="Topics will appear after questions are added for this subject." />}</div><div className="topic-test-options"><label>Number of questions <QuestionCountControl id="topic-question-count" value={topicQuestionCount} onChange={(event) => setTopicQuestionCount(Math.max(5, Math.min(100, Number(event.target.value) || 5)))} onDecrease={() => setTopicQuestionCount((count) => Math.max(5, count - 5))} onIncrease={() => setTopicQuestionCount((count) => Math.min(100, count + 5))} /></label><label className="topic-attempted">Include questions that I have already attempted.<input type="checkbox" checked={includeAttempted} onChange={(event) => setIncludeAttempted(event.target.checked)} /></label></div><button className="primary-button topic-continue" disabled={!selectedTopics.length} onClick={() => startPractice(subject)}>Continue <span>→</span></button></Content>}
+      {screen === "Subject Topics" && <Content title={subject} subtitle="Choose the topics you want to focus on." back={() => go("Practice by Subject")} character="reading"><label className="topic-option topic-select-all"><input type="checkbox" checked={subjectTopics.length > 0 && selectedTopics.length === subjectTopics.length} onChange={(event) => setSelectedTopics(event.target.checked ? subjectTopics : [])} /><span>Select all</span></label><div className="topic-list">{subjectTopics.map((topic) => { const topicQuestions = questions.filter((item) => canonicalSubject(item.subject) === canonicalSubject(subject) && displayTopic(item.topic || item.tag) === topic); const attempted = topicQuestions.filter((item) => attemptedIds.has(item.id)).length; return <label className="topic-option" key={topic}><input type="checkbox" checked={selectedTopics.includes(topic)} onChange={() => setSelectedTopics((items) => items.includes(topic) ? items.filter((item) => item !== topic) : [...items, topic])} /><span><b>{topic}</b><small>{attempted} of {topicQuestions.length} attempted</small></span></label>; })}{!subjectTopics.length && <Empty icon="▤" title="No topics available" text="Topics will appear after questions are added for this subject." />}</div><div className="topic-test-options"><label>Number of questions <QuestionCountControl id="topic-question-count" value={topicQuestionCount} onChange={(event) => setTopicQuestionCount(Math.max(5, Math.min(Math.max(5, matchingQuestions.length), Number(event.target.value) || 5)))} onDecrease={() => setTopicQuestionCount((count) => Math.max(5, count - 5))} onIncrease={() => setTopicQuestionCount((count) => Math.min(Math.max(5, matchingQuestions.length), count + 5))} max={Math.max(5, matchingQuestions.length)} /></label><label className="topic-attempted">Include questions that I have already attempted.<input type="checkbox" checked={includeAttempted} onChange={(event) => setIncludeAttempted(event.target.checked)} /></label></div><button className="primary-button topic-continue" disabled={!selectedTopics.length} onClick={() => startPractice(subject)}>Continue <span>→</span></button></Content>}
 
       {screen === "Practice by Year" && <Content title="Practice by Year" subtitle="Practice a complete year’s paper." back={() => go("Home")} character="reading"><div className="year-section-label">Select by year</div><div className="year-grid">{availableYears.map((year) => <button className={`year-chip ${selectedYear === year ? "selected" : ""}`} key={year} onClick={() => setSelectedYear(year)}>{year}</button>)}</div><PracticeStartButton className="year-start-button" disabled={!selectedYear} onClick={() => startPractice(selectedYear)} /></Content>}
 

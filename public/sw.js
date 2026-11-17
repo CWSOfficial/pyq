@@ -1,4 +1,4 @@
-const CACHE_NAME = "pyq-cloud-shell-v4";
+const CACHE_NAME = "pyq-cloud-shell-v5";
 const APP_SHELL = [
   "/",
   "/manifest.json",
@@ -6,7 +6,6 @@ const APP_SHELL = [
   "/icons/icon-192.png",
   "/icons/icon-512.png",
   "/icons/apple-touch-icon.png",
-  "/data/pyq-2026-practice.json",
 ];
 self.addEventListener("install", (event) => {
   event.waitUntil(caches.open(CACHE_NAME).then((cache) => cache.addAll(APP_SHELL)));
@@ -20,7 +19,7 @@ self.addEventListener("fetch", (event) => {
   if (event.request.method !== "GET" || new URL(event.request.url).origin !== self.location.origin) return;
   const url = new URL(event.request.url);
   const isDocument = event.request.mode === "navigate";
-  const isStaticAsset = url.pathname.startsWith("/_next/static/") || url.pathname.startsWith("/mascot-lottie/") || url.pathname.startsWith("/brand/") || url.pathname.startsWith("/figma-assets/") || url.pathname.startsWith("/figma-assets-oct-2026/") || url.pathname.startsWith("/icons/") || url.pathname === "/data/pyq-2026-practice.json";
+  const isStaticAsset = url.pathname.startsWith("/_next/static/") || url.pathname.startsWith("/mascot-lottie/") || url.pathname.startsWith("/brand/") || url.pathname.startsWith("/figma-assets/") || url.pathname.startsWith("/figma-assets-oct-2026/") || url.pathname.startsWith("/icons/");
   event.respondWith(fetch(event.request).then((response) => {
     if (response.ok && (isDocument || isStaticAsset)) {
       const copy = response.clone();

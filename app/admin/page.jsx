@@ -3,24 +3,11 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { createClient } from "../../lib/supabase/client";
 
-const AUTH_DEMO_MODE = process.env.NEXT_PUBLIC_CLIENT_DEMO_MODE === "true" || process.env.NEXT_PUBLIC_AUTH_DEMO_MODE === "true";
-const DEMO_USER_KEY = "pyq-demo-user";
-const DEMO_MUSIC_KEY = "pyq-demo-music";
-const DEMO_CATALOG_KEY = "pyq-demo-catalog";
-const DEFAULT_SUBJECTS = ["Polity", "Economy", "Geography", "History", "Art and Culture", "International relations", "Science and Technology", "Environment", "Current Affairs", "Miscellaneous"];
-const DEFAULT_YEARS = Array.from({ length: 16 }, (_, index) => String(2026 - index));
 const BUILT_IN_MUSIC = [
   { label: "Cloud Focus", url: "/audio/cloud-soft-focus.wav" },
   { label: "Evening Piano", url: "/audio/cloud-evening-piano.wav" },
   { label: "Classic Focus", url: "/audio/pyq-focus.wav" },
 ];
-const DEMO_ADMIN_PHONES = new Set((process.env.NEXT_PUBLIC_DEMO_ADMIN_PHONES || "").split(",").map((value) => value.replace(/\D/g, "")).map((digits) => digits.length === 10 ? `91${digits}` : digits).filter(Boolean));
-
-function isDemoAdmin(user) {
-  const digits = String(user?.phone || "").replace(/\D/g, "");
-  const normalizedPhone = digits.length === 10 ? `91${digits}` : digits;
-  return Boolean(user?.is_demo && (user.email === "pyqcloud@gmail.com" || DEMO_ADMIN_PHONES.has(normalizedPhone)));
-}
 
 const emptyQuestion = { subject: "", year: new Date().getFullYear(), topic: "", prompt: "", options: ["", "", "", ""], correct_option: 0, explanation: "", question_number: "" };
 
@@ -73,9 +60,8 @@ export default function AdminPage() {
   const [editingId, setEditingId] = useState("");
   const [filters, setFilters] = useState({ q: "", subject: "", year: "" });
   const [appliedFilters, setAppliedFilters] = useState({ q: "", subject: "", year: "" });
-  const [musicSettings, setMusicSettings] = useState({ enabled: true, trackUrl: "/audio/cloud-soft-focus.wav", volume: 0.28 });
+  const [musicSettings, setMusicSettings] = useState({ enabled: false, trackUrl: "", volume: 0.28 });
   const [musicBusy, setMusicBusy] = useState(false);
-  const [demoAdmin, setDemoAdmin] = useState(false);
   const [catalog, setCatalog] = useState({ subjects: [], years: [] });
   const [catalogBusy, setCatalogBusy] = useState(false);
   const [catalogError, setCatalogError] = useState("");
@@ -92,85 +78,6 @@ export default function AdminPage() {
   const request = useCallback(async (url, options = {}) => {
     const { data } = await supabase.auth.getSession();
     const accessToken = data.session?.access_token;
-    if (!accessToken && AUTH_DEMO_MODE) {
-      const demoUser = JSON.parse(localStorage.getItem(DEMO_USER_KEY) || "null");
-      if (!isDemoAdmin(demoUser)) throw new Error("Sign in with an authorized local demo admin account.");
-      const parsedUrl = new URL(url, window.location.origin);
-      const isQuestionEndpoint = parsedUrl.pathname === "/api/admin/questions";
-      if (isQuestionEndpoint && options.method && options.method !== "GET") {
-        throw new Error("Adding, editing, or deleting questions requires a verified Supabase admin sign-in.");
-      }
-      const body = JSON.parse(options.body || "{}");
-      const rows = [];
-      if (isQuestionEndpoint || parsedUrl.pathname === "/api/admin/catalog") {
-        for (let offset = 0; offset < 5000; offset += 1000) {
-          const { data, error } = await supabase.from("questions")
-            .select("id, subject, year, exam, topic, prompt, options, correct_option, explanation, question_number")
-            .order("year", { ascending: false }).order("question_number", { ascending: true, nullsFirst: false })
-            .range(offset, offset + 999);
-          if (error) throw new Error("Could not load the Supabase question bank for this demo.");
-          rows.push(...(data || []));
-          if ((data || []).length < 1000) break;
-        }
-      }
-      if (parsedUrl.pathname === "/api/admin/users") throw new Error("Registered user records are not available in local demo mode. Configure the Supabase server key to manage real accounts.");
-      if (parsedUrl.pathname === "/api/admin/catalog") {
-        const readDemoCatalog = () => {
-          const saved = JSON.parse(localStorage.getItem(DEMO_CATALOG_KEY) || "null") || {};
-          const merge = (defaults, dynamic, overrides, kind) => {
-            const values = new Map();
-            [...defaults, ...dynamic].forEach((value) => {
-              const name = String(value || "").trim();
-              if (!name) return;
-              const key = name.toLowerCase();
-              const count = rows.filter((question) => String(kind === "subject" ? question.subject : question.year).toLowerCase() === key).length;
-              values.set(key, { value: name, active: true, questionCount: count });
-            });
-            (Array.isArray(overrides) ? overrides : []).forEach((item) => {
-              const name = String(item?.value || "").trim();
-              if (name) values.set(name.toLowerCase(), { ...values.get(name.toLowerCase()), value: name, active: item.active !== false, questionCount: values.get(name.toLowerCase())?.questionCount || 0 });
-            });
-            const list = [...values.values()];
-            return kind === "year" ? list.sort((a, b) => Number(b.value) - Number(a.value)) : list.sort((a, b) => a.value.localeCompare(b.value));
-          };
-          return {
-            subjects: merge(DEFAULT_SUBJECTS, rows.map((item) => item.subject), saved.subjects, "subject"),
-            years: merge(DEFAULT_YEARS, rows.map((item) => String(item.year)), saved.years, "year"),
-          };
-        };
-        let current = readDemoCatalog();
-        if (!options.method || options.method === "GET") return current;
-        const kind = body.kind || parsedUrl.searchParams.get("kind");
-        const value = String(body.value || parsedUrl.searchParams.get("value") || "").trim();
-        if (!["subject", "year"].includes(kind) || !value) throw new Error("Choose a valid subject or year.");
-        const field = kind === "subject" ? "subjects" : "years";
-        const entries = current[field].map((item) => ({ value: item.value, active: item.active }));
-        const index = entries.findIndex((item) => item.value.toLowerCase() === value.toLowerCase());
-        if (options.method === "POST") {
-          if (index < 0) entries.push({ value, active: true }); else entries[index] = { ...entries[index], active: true };
-        } else if (options.method === "DELETE") {
-          if (index < 0) entries.push({ value, active: false }); else entries[index] = { ...entries[index], active: false };
-        } else throw new Error("Unsupported catalogue action.");
-        localStorage.setItem(DEMO_CATALOG_KEY, JSON.stringify({ ...JSON.parse(localStorage.getItem(DEMO_CATALOG_KEY) || "{}"), [field]: entries }));
-        current = readDemoCatalog();
-        return current;
-      }
-      if (parsedUrl.pathname === "/api/admin/settings/music" && options.method === "PUT") {
-        const trackUrl = typeof body.trackUrl === "string" ? body.trackUrl.trim() : "";
-        if (!trackUrl || !(/^(\/|https:\/\/)/i.test(trackUrl)) || /^(\/\/|javascript:)/i.test(trackUrl)) throw new Error("Use a local /audio file path or a secure https audio URL.");
-        const settings = { enabled: Boolean(body.enabled), trackUrl, volume: Math.max(0, Math.min(1, Number(body.volume) || 0.28)) };
-        localStorage.setItem(DEMO_MUSIC_KEY, JSON.stringify(settings)); return settings;
-      }
-      if (!options.method || options.method === "GET") {
-        const pageIndex = Number(parsedUrl.searchParams.get("page") || 0);
-        const query = (parsedUrl.searchParams.get("q") || "").toLowerCase();
-        const subject = (parsedUrl.searchParams.get("subject") || "").toLowerCase();
-        const year = parsedUrl.searchParams.get("year") || "";
-        const filtered = rows.filter((question) => (!year || String(question.year) === year) && (!subject || question.subject.toLowerCase().includes(subject)) && (!query || `${question.prompt} ${question.topic} ${question.exam}`.toLowerCase().includes(query)));
-        return { questions: filtered.slice(pageIndex * 25, pageIndex * 25 + 25), count: filtered.length, page: pageIndex };
-      }
-      throw new Error("Unsupported local demo action.");
-    }
     if (!accessToken) throw new Error("Sign in to continue.");
     const result = await fetch(url, {
       ...options,
@@ -279,15 +186,10 @@ export default function AdminPage() {
 
   useEffect(() => {
     let active = true;
-    localStorage.removeItem("pyq-demo-questions");
     supabase.auth.getSession().then(({ data }) => {
       if (!active) return;
       setSession(data.session);
       if (!data.session) {
-        const demoUser = AUTH_DEMO_MODE ? JSON.parse(localStorage.getItem(DEMO_USER_KEY) || "null") : null;
-        if (isDemoAdmin(demoUser)) {
-          setDemoAdmin(true); setSession({ user: { email: demoUser.email, phone: demoUser.phone } }); loadQuestions(0, true); loadCatalog(); return;
-        }
         setStatus("blocked");
         setAuthError("Sign in with an authorized admin account to manage questions.");
       } else { loadQuestions(0, true); loadCatalog(); }
@@ -337,19 +239,6 @@ export default function AdminPage() {
     } catch (error) { setSourceError(error.message || "The selected file is not valid JSON or CSV."); }
   };
 
-  const loadProvidedFile = async () => {
-    setSourceError("");
-    setBusy(true);
-    try {
-      const response = await fetch("/data/pyq-2026.json", { cache: "no-store" });
-      if (!response.ok) throw new Error("The provided 2026 question file is missing from this deployment.");
-      const parsed = await response.json();
-      setSourceData(parsed);
-      setSourceFile(null);
-    } catch (error) { setSourceError(error.message); }
-    finally { setBusy(false); }
-  };
-
   const importQuestions = async () => {
     if (!sourceData) return;
     const total = getImportQuestions(sourceData).length;
@@ -397,7 +286,6 @@ export default function AdminPage() {
       const { error } = await supabase.auth.signOut();
       if (error) { setAuthError("Could not sign out this account. Please sign out in the app and try again."); return; }
     }
-    localStorage.removeItem(DEMO_USER_KEY);
     window.location.assign("/?screen=Welcome&next=%2Fadmin");
   };
 
@@ -409,12 +297,11 @@ export default function AdminPage() {
     <div className="admin-layout">
       <aside className="admin-sidebar"><small>WORKSPACE</small><a className="active" href="#questions">Question bank</a><a href="#catalog">Subjects &amp; years</a><a href="#users">User accounts</a><span>Signed in as admin</span></aside>
       <section className="admin-content">
-        <div className="admin-heading"><div><span className="admin-eyebrow">ADMINISTRATION</span><h1>Question bank</h1><p>Add questions manually or import a validated JSON question set.</p></div><div className="admin-count"><strong>{questionCount.toLocaleString()}</strong><span>questions</span></div></div>
+        <div className="admin-heading"><div><span className="admin-eyebrow">ADMINISTRATION</span><h1>Question bank</h1><p>Add questions manually or import a validated JSON question set into Supabase.</p></div><div className="admin-count"><strong>{questionCount.toLocaleString()}</strong><span>questions</span></div></div>
         {notice && <div className="admin-notice" role="status">{notice}<button aria-label="Dismiss message" onClick={() => setNotice("")}>×</button></div>}
         <div className="admin-work-grid">
-          <section className="admin-card admin-import-card"><div className="admin-card-heading"><span className="admin-card-icon">⇧</span><div><h2>Import a question file</h2><p>Upload an app JSON export or use the supplied 2026 set.</p></div></div>
-            <button className="admin-button secondary full" type="button" onClick={loadProvidedFile} disabled={busy}>Load the supplied 2026 questions</button>
-            <label className="admin-file-picker">Or choose a JSON or CSV file<input type="file" accept="application/json,.json,text/csv,.csv" onChange={(event) => readQuestionFile(event.target.files?.[0])} /></label>
+          <section className="admin-card admin-import-card"><div className="admin-card-heading"><span className="admin-card-icon">⇧</span><div><h2>Import a question file</h2><p>Upload a validated JSON or CSV question set.</p></div></div>
+            <label className="admin-file-picker">Choose a JSON or CSV file<input type="file" accept="application/json,.json,text/csv,.csv" onChange={(event) => readQuestionFile(event.target.files?.[0])} /></label>
             {sourceFile && <p className="admin-file-name">Selected: {sourceFile.name}</p>}
             {sourceError && <p className="admin-field-error" role="alert">{sourceError}</p>}
             {sourceData && <div className="admin-import-preview"><b>{getImportQuestions(sourceData).length} questions ready</b><span>Questions are validated and saved with stable IDs, so importing the same file again updates those records instead of duplicating them.</span><ul>{getImportQuestions(sourceData).slice(0, 3).map((question, index) => <li key={question.id || index}>{titleOf(question)}</li>)}</ul><button className="admin-button primary full" onClick={importQuestions} disabled={busy}>{busy ? "Importing…" : `Import ${getImportQuestions(sourceData).length} questions`}</button></div>}
@@ -452,14 +339,13 @@ export default function AdminPage() {
         </section>
 
         <section className="admin-card" id="users"><div className="admin-list-heading"><div><h2>User accounts</h2><p>View registered profiles, update a name, or permanently remove an account.</p></div><button className="admin-button secondary" onClick={() => loadUsers(1)} disabled={usersBusy}>{usersBusy ? "Loading…" : "Load users"}</button></div>
-          {usersError && !demoAdmin && <p className="admin-field-error" role="alert">{usersError}</p>}
-          {demoAdmin && <div className="admin-demo-note">Client demo mode: questions start from Supabase, but edits are saved only in this browser. Real user accounts are not available in this demo.</div>}
+          {usersError && <p className="admin-field-error" role="alert">{usersError}</p>}
           <form className="admin-user-search" onSubmit={(event) => { event.preventDefault(); loadUsers(1, userSearch); }}><input aria-label="Search users" placeholder="Search name, email or phone" value={userSearch} onChange={(event) => setUserSearch(event.target.value)} /><button className="admin-button primary" type="submit" disabled={usersBusy}>Search</button></form>
           {editingUser && <form className="admin-user-edit" onSubmit={saveUserName}><div><b>Edit profile</b><small>{editingUser.email || editingUser.phone}</small></div><label>Full name<input value={editingUserName} onChange={(event) => setEditingUserName(event.target.value)} maxLength={80} required /></label><button className="admin-button primary" type="submit" disabled={usersBusy}>{usersBusy ? "Saving…" : "Save profile"}</button><button className="admin-button secondary" type="button" onClick={() => setEditingUser(null)}>Cancel</button></form>}
-          {users.length ? <div className="admin-table-wrap"><table className="admin-users-table"><thead><tr><th>User</th><th>Contact</th><th>Joined</th><th>Actions</th></tr></thead><tbody>{users.map((user) => <tr key={user.id}><td><b>{user.fullName || "Name not provided"}</b><small>{user.isAdmin ? "Admin account · protected" : user.confirmed ? "Verified account" : "Unverified account"}</small></td><td>{user.email || user.phone || "No contact details"}</td><td>{user.createdAt ? new Date(user.createdAt).toLocaleDateString() : "—"}</td><td><div className="admin-row-actions"><button className="admin-edit-button" disabled={usersBusy} onClick={() => { setEditingUser(user); setEditingUserName(user.fullName || ""); }}>Edit name</button><button className="admin-remove-button" disabled={usersBusy || user.isAdmin} onClick={() => removeUser(user)}>Delete</button></div></td></tr>)}</tbody></table></div> : <div className="admin-empty">{usersBusy ? "Loading users…" : demoAdmin ? "Registered profiles will appear here after server access is configured." : usersError ? "User list unavailable." : "Load users to see registered profiles."}</div>}
+          {users.length ? <div className="admin-table-wrap"><table className="admin-users-table"><thead><tr><th>User</th><th>Contact</th><th>Joined</th><th>Actions</th></tr></thead><tbody>{users.map((user) => <tr key={user.id}><td><b>{user.fullName || "Name not provided"}</b><small>{user.isAdmin ? "Admin account · protected" : user.confirmed ? "Verified account" : "Unverified account"}</small></td><td>{user.email || user.phone || "No contact details"}</td><td>{user.createdAt ? new Date(user.createdAt).toLocaleDateString() : "—"}</td><td><div className="admin-row-actions"><button className="admin-edit-button" disabled={usersBusy} onClick={() => { setEditingUser(user); setEditingUserName(user.fullName || ""); }}>Edit name</button><button className="admin-remove-button" disabled={usersBusy || user.isAdmin} onClick={() => removeUser(user)}>Delete</button></div></td></tr>)}</tbody></table></div> : <div className="admin-empty">{usersBusy ? "Loading users…" : usersError ? "User list unavailable." : "Load users to see registered profiles."}</div>}
           {(users.length > 0 || usersPage > 1) && <div className="admin-pagination"><span>Page {usersPage}</span><div><button className="admin-button secondary" disabled={usersPage <= 1 || usersBusy} onClick={() => loadUsers(usersPage - 1)}>Previous</button><button className="admin-button secondary" disabled={!usersHasMore || usersBusy} onClick={() => loadUsers(usersPage + 1)}>Next</button></div></div>}
         </section>
-    <footer className="admin-footer">{demoAdmin ? "Client demo mode: admin edits stay in this browser and do not change Supabase." : "Question content is saved to the configured Supabase project. Admin actions require server-verified access."}</footer>
+    <footer className="admin-footer">Question content is saved to the configured Supabase project. Admin actions require server-verified access.</footer>
       </section>
     </div>
   </main>;

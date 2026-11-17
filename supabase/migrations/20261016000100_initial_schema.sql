@@ -139,10 +139,3 @@ drop trigger if exists on_auth_user_created on auth.users;
 create trigger on_auth_user_created
   after insert on auth.users
   for each row execute procedure public.handle_new_user();
-
-insert into public.questions (subject, year, topic, prompt, options, correct_option, explanation, question_number)
-values
-  ('Polity', 2023, 'Fundamental Rights', 'Which of the following statements about the Right to Equality is correct?', '["It is available only to citizens", "It is available to every person in India", "It can never be restricted", "It applies only to public employment"]'::jsonb, 1, 'Articles 14 to 18 use the term person in several guarantees, so this protection is not limited to citizens.', 1),
-  ('History', 2022, 'Modern India', 'The first session of the Indian National Congress was held in which city?', '["Calcutta", "Madras", "Bombay", "Allahabad"]'::jsonb, 2, 'The first session was held in Bombay in December 1885, presided over by W. C. Bonnerjee.', 1),
-  ('Geography', 2021, 'Indian Rivers', 'Which river is known as the Dakshin Ganga?', '["Krishna", "Godavari", "Kaveri", "Narmada"]'::jsonb, 1, 'The Godavari is the longest river of peninsular India and is often called the Dakshin Ganga.', 1)
-on conflict do nothing;

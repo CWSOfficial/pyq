@@ -94,7 +94,6 @@ const canonicalSubject = (name) => subjectAliases[String(name || "").trim().toLo
 const subjectTopicCatalog = { Polity: ["Fundamental Rights (FR)", "Directive Principles of State Policy (DPSP)", "Fundamental Duties (FD)", "Union and its Territory", "Citizenship"] };
 const topicAliases = { "Fundamental Rights": "Fundamental Rights (FR)", "Directive Principles of State Policy": "Directive Principles of State Policy (DPSP)", "Fundamental Duties": "Fundamental Duties (FD)" };
 const displayTopic = (topic) => topicAliases[topic] || topic;
-const designYears = Array.from({ length: 16 }, (_, index) => String(2026 - index));
 const formatIndianPhone = (value) => {
   const digits = value.replace(/\D/g, "").replace(/^91(?=\d{10}$)/, "");
   return digits.length === 10 ? `+91 ${digits.slice(0, 5)} ${digits.slice(5)}` : value;
@@ -112,11 +111,6 @@ const subjectIcons = [
   "/figma-assets/feb633d4-461c-4b36-bdbc-5ddbe4f78500-3fda5.svg",
 ];
 const icon = { Home: "⌂", Tests: "▤", Bookmarks: "♧", "Practice by Subject": "▤", "Practice by Year": "▦", "Random Practice": "⤨", "Mistake Book": "⊗", Notes: "▧", "Study Timer": "◷", Meditation: "◉", "My Habits": "☷", "Analytics & Streak": "◌", "CSR Activity": "♡", "My Profile": "♙" };
-
-function readSaved(key, fallback) {
-  if (typeof window === "undefined") return fallback;
-  try { const value = window.localStorage.getItem(key); return value ? JSON.parse(value) : fallback; } catch { return fallback; }
-}
 
 function notePlainText(value) { return String(value || "").trim(); }
 
@@ -169,20 +163,9 @@ function summarizeAttempts(attempts) {
 }
 
 const supabase = createClient();
-// Keep the configured sign-in behavior, but never mix stale local demo questions
-// into the production question bank loaded from Supabase.
-const AUTH_DEMO_MODE = process.env.NEXT_PUBLIC_CLIENT_DEMO_MODE === "true" || process.env.NEXT_PUBLIC_AUTH_DEMO_MODE === "true";
-const DEMO_USER_KEY = "pyq-demo-user";
-const DEMO_ADMIN_PHONES = new Set((process.env.NEXT_PUBLIC_DEMO_ADMIN_PHONES || "").split(",").map((value) => value.replace(/\D/g, "")).map((digits) => digits.length === 10 ? `91${digits}` : digits).filter(Boolean));
-function isDemoAdminUser(user) {
-  const digits = String(user?.phone || "").replace(/\D/g, "");
-  const normalizedPhone = digits.length === 10 ? `91${digits}` : digits;
-  return Boolean(user?.is_demo && (user.email === "pyqcloud@gmail.com" || DEMO_ADMIN_PHONES.has(normalizedPhone)));
-}
 function hasCompletedOnboarding(user) {
   if (!user?.id) return false;
-  if (user.user_metadata?.onboarding_completed || readSaved(`pyq-onboarding:${user.id}`, false)) return true;
-  return Boolean(user.user_metadata?.full_name && !String(user.id).startsWith("demo-email:"));
+  return Boolean(user.user_metadata?.onboarding_completed);
 }
 const builtInMusicTracks = [
   { label: "Cloud Focus", url: "/audio/cloud-soft-focus.wav" },
@@ -211,6 +194,7 @@ export default function Page() {
   const screenHistoryRef = useRef([]);
   const exitPromptTimeRef = useRef(0);
   const practiceBackApprovedRef = useRef(false);
+  const testSubmitBusyRef = useRef(false);
   const [timeGreeting, setTimeGreeting] = useState("Good evening");
   const [selectedYear, setSelectedYear] = useState("");
   const [testYear, setTestYear] = useState("");
@@ -245,7 +229,7 @@ export default function Page() {
   const [musicPlaying, setMusicPlaying] = useState(false);
   const [showMusicPicker, setShowMusicPicker] = useState(false);
   const [showMusicControls, setShowMusicControls] = useState(false);
-  const [authEmail, setAuthEmail] = useState(AUTH_DEMO_MODE ? "pyqcloud@gmail.com" : "");
+  const [authEmail, setAuthEmail] = useState("");
   const [phoneNumber, setPhoneNumber] = useState("");
   const [phoneCode, setPhoneCode] = useState("");
   const [phoneBusy, setPhoneBusy] = useState(false);
@@ -323,10 +307,10 @@ export default function Page() {
   const [analytics, setAnalytics] = useState({ attempted: 0, correctCount: 0, streak: 0, bestStreak: 0, today: 0 });
   const [showStreakDetails, setShowStreakDetails] = useState(false);
   const savedName = String(profileName || user?.user_metadata?.full_name || "").trim();
-  const displayName = user?.is_demo && savedName.toLowerCase() === "pyq cloud" ? "" : savedName;
+  const displayName = savedName;
   const firstName = displayName.trim().split(/\s+/)[0] || "";
   const availableSubjects = [...new Set(questions.map((item) => item.subject).filter(Boolean))].sort((a, b) => a.localeCompare(b));
-  const availableYears = practiceCatalog?.years || [...new Set([...designYears, ...questions.map((item) => String(item.year)).filter(Boolean)])].sort((a, b) => Number(b) - Number(a));
+  const availableYears = practiceCatalog?.years || [...new Set(questions.map((item) => String(item.year)).filter(Boolean))].sort((a, b) => Number(b) - Number(a));
   const habitDateKey = localDateKey(habitDate);
   const isHabitDateToday = habitDateKey === localDateKey();
   const habitMonthKey = `${habitDate.getFullYear()}-${String(habitDate.getMonth() + 1).padStart(2, "0")}`;
@@ -385,13 +369,8 @@ export default function Page() {
   if (mistakeSort === "Oldest") filteredMistakeItems.reverse();
 
   const loadUserData = async (activeUser) => {
-    if (!activeUser || activeUser.is_demo) {
-      setBookmarks(readSaved("pyq-bookmarks", []));
-      setNotes(readSaved("pyq-notes", []));
-      setMistakes(readSaved("pyq-mistakes", []));
-      const savedAttempts = readSaved("pyq-attempts", []);
-      setAttemptHistory(savedAttempts);
-      setAnalytics(summarizeAttempts(savedAttempts));
+    if (!activeUser) {
+      setBookmarks([]); setNotes([]); setMistakes([]); setHabits([]); setHabitLogs([]); setTestHistory([]); setAttemptHistory([]); setAnalytics(summarizeAttempts([]));
       return;
     }
     const [{ data: saved }, { data: savedNotes }, { data: attempts }, { data: habitRows }, { data: habitLogs }] = await Promise.all([
@@ -403,17 +382,38 @@ export default function Page() {
     ]);
     if (saved) setBookmarks(saved.map((item) => item.questions?.prompt).filter(Boolean));
     if (habitRows) { const done = new Set((habitLogs ?? []).filter((item) => item.completed).map((item) => item.habit_id)); setHabits(habitRows.map((item) => ({ ...item, done: done.has(item.id) }))); }
+    if (habitLogs) setHabitLogs(habitLogs);
     if (savedNotes) {
-      const order = readSaved(`pyq-note-order:${activeUser.id}`, []);
-      const mapped = savedNotes.map((item) => ({ id: item.id, text: item.content, date: new Date(item.created_at).toLocaleDateString("en-IN", { day: "numeric", month: "short" }) }));
-      if (order.length) mapped.sort((left, right) => { const leftRank = order.indexOf(left.id); const rightRank = order.indexOf(right.id); return (leftRank < 0 ? -1 : leftRank) - (rightRank < 0 ? -1 : rightRank); });
-      setNotes(mapped);
+      const noteOrder = Array.isArray(activeUser.user_metadata?.note_order) ? activeUser.user_metadata.note_order : [];
+      const mappedNotes = savedNotes.map((item) => ({ id: item.id, text: item.content, date: new Date(item.created_at).toLocaleDateString("en-IN", { day: "numeric", month: "short" }) }));
+      mappedNotes.sort((left, right) => {
+        const leftRank = noteOrder.indexOf(left.id); const rightRank = noteOrder.indexOf(right.id);
+        if (leftRank < 0 && rightRank < 0) return 0;
+        if (leftRank < 0) return 1;
+        if (rightRank < 0) return -1;
+        return leftRank - rightRank;
+      });
+      setNotes(mappedNotes);
     }
     if (attempts) {
       setAttemptHistory(attempts);
       setAnalytics(summarizeAttempts(attempts));
       setMistakes([...new Set(attempts.filter((item) => !item.is_correct).map((item) => item.questions?.prompt).filter(Boolean))]);
     }
+    const savedTestHistory = Array.isArray(activeUser.user_metadata?.test_history) ? activeUser.user_metadata.test_history.slice(0, 5) : [];
+    const historyQuestionIds = [...new Set(savedTestHistory.flatMap((item) => Array.isArray(item.questionIds) ? item.questionIds : []))];
+    if (historyQuestionIds.length) {
+      const { data: historyQuestions } = await supabase.from("questions")
+        .select("id, subject, year, topic, prompt, options, correct_option, explanation, question_number")
+        .in("id", historyQuestionIds);
+      const questionById = new Map((historyQuestions || []).map((item) => [item.id, { ...item, year: String(item.year), tag: item.topic, answer: item.correct_option }]));
+      setTestHistory(savedTestHistory.map((item) => ({
+        subject: item.subject, answers: item.answers || {}, reviewFlags: item.reviewFlags || [],
+        answered: item.answered || 0, correct: item.correct || 0, incorrect: item.incorrect || 0,
+        unanswered: item.unanswered || 0, accuracy: item.accuracy || 0, score: item.score || 0,
+        completedAt: item.completedAt, questions: (item.questionIds || []).map((id) => questionById.get(id)).filter(Boolean),
+      })));
+    } else setTestHistory([]);
   };
 
   const loadAvatar = async (activeUser) => {
@@ -442,72 +442,35 @@ export default function Page() {
 
   useEffect(() => {
     const requestedScreen = new URLSearchParams(window.location.search).get("screen");
-    localStorage.removeItem("pyq-demo-questions");
-    setBookmarks(readSaved("pyq-bookmarks", []));
-    setMistakes(readSaved("pyq-mistakes", []));
-    setNotes(readSaved("pyq-notes", []));
-    const storedHabits = readSaved("pyq-habits", []);
-    const cleanHabits = storedHabits.filter((habit) => (habit.name || "").trim().toLowerCase() !== "my daily habit");
-    setHabits(cleanHabits);
-    setHabitLogs(readSaved("pyq-habit-logs", []));
-    setTestHistory(readSaved("pyq-test-history", []));
-    const savedAttempts = readSaved("pyq-attempts", []);
-    setAttemptHistory(savedAttempts);
-    setAnalytics(summarizeAttempts(savedAttempts));
+    for (const key of Object.keys(window.localStorage)) if (key.startsWith("pyq-")) window.localStorage.removeItem(key);
+    setBookmarks([]); setMistakes([]); setNotes([]); setHabits([]); setHabitLogs([]); setTestHistory([]); setAttemptHistory([]); setAnalytics(summarizeAttempts([]));
     setHydrated(true);
-    let localCatalog = null;
-    if (AUTH_DEMO_MODE) {
-      try {
-        const saved = JSON.parse(localStorage.getItem("pyq-demo-catalog") || "null");
-        if (saved) localCatalog = { subjects: (saved.subjects || []).filter((item) => item.active !== false).map((item) => item.value), years: (saved.years || []).filter((item) => item.active !== false).map((item) => String(item.value)).sort((a, b) => Number(b) - Number(a)) };
-      } catch {}
-    }
-    if (localCatalog) setPracticeCatalog(localCatalog);
-    else fetch("/api/settings/catalog", { cache: "no-store" }).then((response) => response.ok ? response.json() : null).then((value) => {
+    fetch("/api/settings/catalog", { cache: "no-store" }).then((response) => response.ok ? response.json() : null).then((value) => {
       if (value && Array.isArray(value.subjects) && Array.isArray(value.years)) setPracticeCatalog(value);
     }).catch(() => {});
     const standalone = window.matchMedia("(display-mode: standalone)").matches || window.navigator.standalone === true;
     setIsInstalledApp(standalone);
-    let hasSavedDemoUser = false;
-    if (AUTH_DEMO_MODE) {
-      try {
-        const savedDemoUser = JSON.parse(localStorage.getItem(DEMO_USER_KEY) || "null");
-        if (savedDemoUser?.is_demo) {
-          hasSavedDemoUser = true;
-          setUser(savedDemoUser);
-          setProfileName(savedDemoUser.user_metadata?.full_name || "");
-          setAccountEmail(savedDemoUser.email || "");
-          setAccountPhone(savedDemoUser.phone || "");
-          setAvatarUrl(readSaved(`pyq-demo-avatar:${savedDemoUser.id}`, ""));
-          resetNavigation(isDemoAdminUser(savedDemoUser) || savedDemoUser.user_metadata?.full_name || hasCompletedOnboarding(savedDemoUser) ? "Home" : "About You");
-          setAuthReady(true);
-          loadUserData(savedDemoUser);
-        }
-      } catch { localStorage.removeItem(DEMO_USER_KEY); }
-    }
     let active = true;
     supabase.auth.getSession().then(({ data }) => {
       if (!active) return;
-      if (hasSavedDemoUser) return;
       const sessionUser = data.session?.user ?? null;
       setUser(sessionUser);
       setProfileName(sessionUser?.user_metadata?.full_name ?? "");
       setAccountEmail(sessionUser?.email ?? "");
       setAccountPhone(sessionUser?.phone ?? "");
       if (sessionUser && new URLSearchParams(window.location.search).get("next") === "/admin") window.location.replace("/admin");
-      else if (sessionUser) resetNavigation(requestedScreen === "Reset Password" ? "Reset Password" : isDemoAdminUser(sessionUser) || sessionUser.user_metadata?.full_name || hasCompletedOnboarding(sessionUser) ? "Home" : "About You");
+      else if (sessionUser) resetNavigation(requestedScreen === "Reset Password" ? "Reset Password" : hasCompletedOnboarding(sessionUser) ? "Home" : "About You");
       else resetNavigation(requestedScreen === "Auth" || requestedScreen === "Reset Password" ? requestedScreen : "Welcome");
       setAuthReady(true);
       loadAvatar(sessionUser);
       loadUserData(sessionUser);
     }).catch(() => {
-      if (!active || hasSavedDemoUser) return;
+      if (!active) return;
       setUser(null);
       resetNavigation(requestedScreen === "Auth" || requestedScreen === "Reset Password" ? requestedScreen : "Welcome");
       setAuthReady(true);
     });
     const { data: authListener } = supabase.auth.onAuthStateChange((_event, session) => {
-      if (AUTH_DEMO_MODE && localStorage.getItem(DEMO_USER_KEY)) return;
       const nextUser = session?.user ?? null;
       setUser(nextUser);
       loadAvatar(nextUser);
@@ -517,7 +480,7 @@ export default function Page() {
       if (_event === "PASSWORD_RECOVERY") resetNavigation("Reset Password");
       else if (_event === "SIGNED_IN") {
         if (new URLSearchParams(window.location.search).get("next") === "/admin") { window.location.replace("/admin"); return; }
-        resetNavigation(isDemoAdminUser(nextUser) || nextUser?.user_metadata?.full_name || hasCompletedOnboarding(nextUser) ? "Home" : "About You");
+        resetNavigation(hasCompletedOnboarding(nextUser) ? "Home" : "About You");
       }
       else if (_event === "SIGNED_OUT") resetNavigation("Welcome");
       if (_event === "SIGNED_IN" || _event === "SIGNED_OUT") setAuthReady(true);
@@ -537,20 +500,6 @@ export default function Page() {
       }
       return { data: rows, error: null };
     })();
-    const onLocalQuestionBankChange = (event) => {
-      if (event.key === "pyq-demo-music") {
-        try { const settings = JSON.parse(event.newValue || "null"); if (settings) setMusicSettings(settings); } catch {}
-        return;
-      }
-      if (event.key === "pyq-demo-catalog") {
-        try {
-          const saved = JSON.parse(event.newValue || "null");
-          if (saved) setPracticeCatalog({ subjects: (saved.subjects || []).filter((item) => item.active !== false).map((item) => item.value), years: (saved.years || []).filter((item) => item.active !== false).map((item) => String(item.value)).sort((a, b) => Number(b) - Number(a)) });
-        } catch {}
-        return;
-      }
-    };
-    window.addEventListener("storage", onLocalQuestionBankChange);
     databaseQuestions.then((databaseResult) => {
       if (!active) return;
       const supabaseRows = databaseResult.data || [];
@@ -563,9 +512,7 @@ export default function Page() {
     });
     const onInstall = (event) => { event.preventDefault(); setInstallPrompt(event); };
     const onInstalled = () => { setInstallPrompt(null); setIsInstalledApp(true); setToast("PYQ Cloud was added to your home screen."); };
-    const localMusic = AUTH_DEMO_MODE ? readSaved("pyq-demo-music", null) : null;
-    if (localMusic) setMusicSettings(localMusic);
-    else fetch("/api/settings/music", { cache: "no-store" }).then((result) => result.ok ? result.json() : null).then((settings) => { if (settings) setMusicSettings(settings); }).catch(() => {});
+    fetch("/api/settings/music", { cache: "no-store" }).then((result) => result.ok ? result.json() : null).then((settings) => { if (settings) setMusicSettings(settings); }).catch(() => {});
     const onDisplayModeChange = (event) => setIsInstalledApp(event.matches || window.navigator.standalone === true);
     const displayMode = window.matchMedia("(display-mode: standalone)");
     displayMode.addEventListener?.("change", onDisplayModeChange);
@@ -576,7 +523,6 @@ export default function Page() {
       authListener.subscription.unsubscribe();
       window.removeEventListener("beforeinstallprompt", onInstall);
       window.removeEventListener("appinstalled", onInstalled);
-      window.removeEventListener("storage", onLocalQuestionBankChange);
       displayMode.removeEventListener?.("change", onDisplayModeChange);
     };
   }, []);
@@ -613,17 +559,10 @@ export default function Page() {
       document.removeEventListener("visibilitychange", onReturn);
     };
   }, []);
-  useEffect(() => { if (hydrated && (!user || user.is_demo)) localStorage.setItem("pyq-bookmarks", JSON.stringify(bookmarks)); }, [bookmarks, hydrated, user]);
-  useEffect(() => { if (hydrated) localStorage.setItem("pyq-mistakes", JSON.stringify(mistakes)); }, [mistakes, hydrated]);
-  useEffect(() => { if (hydrated && (!user || user.is_demo)) localStorage.setItem("pyq-notes", JSON.stringify(notes)); }, [notes, hydrated, user]);
-  useEffect(() => { if (hydrated && (!user || user.is_demo)) localStorage.setItem("pyq-habits", JSON.stringify(habits)); }, [habits, hydrated, user]);
-  useEffect(() => { if (hydrated && (!user || user.is_demo)) localStorage.setItem("pyq-habit-logs", JSON.stringify(habitLogs)); }, [habitLogs, hydrated, user]);
   useEffect(() => {
     if (!hydrated) return undefined;
-    if (!user || user.is_demo) {
-      const dayLogs = habitLogs.filter((log) => log.log_date === habitDateKey && log.completed);
-      const done = new Set(dayLogs.map((log) => log.habit_id));
-      setHabits((items) => items.map((habit) => ({ ...habit, done: done.has(habit.id) })));
+    if (!user) {
+      setHabits([]); setHabitLogs([]);
       return undefined;
     }
     let active = true;
@@ -643,22 +582,17 @@ export default function Page() {
       setHabitHistory(Object.fromEntries(rows.map((row) => [String(row.log_date).slice(0, 10), Boolean(row.completed)])));
       setHabitHistoryLoading(false);
     };
-    if (!user || user.is_demo) {
-      applyHistory(habitLogs.filter((log) => log.habit_id === consistencyHabit.id && String(log.log_date).startsWith(habitMonthKey)));
-    } else {
-      const monthStart = `${habitMonthKey}-01`;
-      const monthEnd = `${habitMonthKey}-${String(daysInHabitMonth).padStart(2, "0")}`;
-      supabase.from("habit_logs").select("log_date, completed").eq("user_id", user.id).eq("habit_id", consistencyHabit.id).gte("log_date", monthStart).lte("log_date", monthEnd).then(({ data, error }) => {
-        if (!active) return;
-        if (error) { setHabitHistory({}); setToast("Could not load habit history"); }
-        else applyHistory(data ?? []);
-        setHabitHistoryLoading(false);
-      });
-    }
+    if (!user) { setHabitHistory({}); setHabitHistoryLoading(false); return () => { active = false; }; }
+    const monthStart = `${habitMonthKey}-01`;
+    const monthEnd = `${habitMonthKey}-${String(daysInHabitMonth).padStart(2, "0")}`;
+    supabase.from("habit_logs").select("log_date, completed").eq("user_id", user.id).eq("habit_id", consistencyHabit.id).gte("log_date", monthStart).lte("log_date", monthEnd).then(({ data, error }) => {
+      if (!active) return;
+      if (error) { setHabitHistory({}); setToast("Could not load habit history"); }
+      else applyHistory(data ?? []);
+      setHabitHistoryLoading(false);
+    });
     return () => { active = false; };
   }, [consistencyHabit, habitMonthKey, daysInHabitMonth, user, habitLogs]);
-  useEffect(() => { if (hydrated && (!user || user.is_demo)) localStorage.setItem("pyq-attempts", JSON.stringify(attemptHistory)); }, [attemptHistory, hydrated, user]);
-  useEffect(() => { if (hydrated) localStorage.setItem("pyq-test-history", JSON.stringify(testHistory.slice(0, 5))); }, [testHistory, hydrated]);
   useEffect(() => { setAnalytics(summarizeAttempts(attemptHistory)); }, [attemptHistory]);
   useEffect(() => {
     if (!timerRunning) return undefined;
@@ -684,9 +618,9 @@ export default function Page() {
     return () => window.cancelAnimationFrame(frame);
   }, [screen, questionIndex]);
   useEffect(() => {
-    const savedFocusMinutes = Number(readSaved("pyq-focus-duration-minutes", 25));
+    const savedFocusMinutes = Number(user?.user_metadata?.focus_duration_minutes || 25);
     if (Number.isInteger(savedFocusMinutes) && savedFocusMinutes >= 1 && savedFocusMinutes <= 999) { setFocusMinutes(savedFocusMinutes); setTimerMinutes(savedFocusMinutes); setTimerDurationDraft(String(savedFocusMinutes)); setSeconds(savedFocusMinutes * 60); }
-  }, []);
+  }, [user]);
   useEffect(() => {
     if (!meditationRunning) return undefined;
     const id = window.setInterval(() => setMeditationSeconds((value) => {
@@ -814,16 +748,15 @@ export default function Page() {
     setMusicPlaying(false); setShowMusicPicker(false); setToast(`${track.label} selected. Tap Focus music to play.`);
   };
   const recordPracticeAnswer = (index) => {
-    if (!user || user.is_demo) {
-      setAttemptHistory((value) => [...value, { question_id: question.id, subject: question.subject, is_correct: index === question.answer, attempted_at: new Date().toISOString() }]);
-    }
-    if (index !== question.answer) setMistakes((value) => value.includes(question.prompt) ? value : [...value, question.prompt]);
-    if (user && !user.is_demo && question.id) {
-      supabase.from("question_attempts").insert({ user_id: user.id, question_id: question.id, selected_option: index, is_correct: index === question.answer }).select("question_id,is_correct,attempted_at,questions(prompt,subject)").single().then(({ data, error }) => {
-        if (error) { setToast("Could not save this answer. Your stats were not updated."); return; }
-        if (data) setAttemptHistory((history) => [...history, data]);
-      });
-    }
+    if (!user) return setToast("Sign in to save your progress.");
+    if (!question.id) return setToast("This question is not available in the Supabase question bank.");
+    supabase.from("question_attempts").insert({ user_id: user.id, question_id: question.id, selected_option: index, is_correct: index === question.answer }).select("question_id,is_correct,attempted_at,questions(prompt,subject)").single().then(({ data, error }) => {
+      if (error) { setToast("Could not save this answer. Your stats were not updated."); return; }
+      if (data) {
+        setAttemptHistory((history) => [...history, data]);
+        if (!data.is_correct && data.questions?.prompt) setMistakes((items) => items.includes(data.questions.prompt) ? items : [...items, data.questions.prompt]);
+      }
+    });
   };
   const chooseAnswer = (index) => {
     if (eliminated.includes(index)) return;
@@ -851,6 +784,7 @@ export default function Page() {
     setEliminated((value) => [...value, index]);
   };
   const startConfiguredTest = (scope, count, duration) => {
+    testSubmitBusyRef.current = false;
     const pool = questions.filter((item) => canonicalSubject(item.subject).toLowerCase() === canonicalSubject(scope).toLowerCase() || String(item.year) === scope);
     if (!pool.length) { setToast(`No questions are available for ${scope} yet`); return; }
     const selectedQuestions = pool.slice(0, count);
@@ -866,12 +800,28 @@ export default function Page() {
     setPendingTest({ scope, count: actualCount, duration: actualDuration });
     setShowTestRules(true);
   };
-  const submitTest = () => {
-    if (!testQuestions.length) return;
+  const submitTest = async () => {
+    if (!testQuestions.length || testSubmitBusyRef.current) return;
+    if (!user) { setToast("Sign in to save your test results to your account."); return; }
+    testSubmitBusyRef.current = true;
     const answered = Object.keys(testAnswers).length;
     const correct = testQuestions.reduce((total, item, index) => total + (testAnswers[index] === item.answer ? 1 : 0), 0);
     const incorrect = answered - correct;
-    const result = { subject, questions: testQuestions, answers: testAnswers, reviewFlags: testReviewFlags, answered, correct, incorrect, unanswered: testQuestions.length - answered, accuracy: answered ? Math.round(correct / answered * 100) : 0, score: Number((correct * 2 - incorrect * (2 / 3)).toFixed(2)), completedAt: new Date().toISOString() };
+    const completedAt = new Date().toISOString();
+    const result = { subject, questions: testQuestions, answers: testAnswers, reviewFlags: testReviewFlags, answered, correct, incorrect, unanswered: testQuestions.length - answered, accuracy: answered ? Math.round(correct / answered * 100) : 0, score: Number((correct * 2 - incorrect * (2 / 3)).toFixed(2)), completedAt };
+    const { data: authData, error: authError } = await supabase.auth.getUser();
+    if (authError || !authData.user) { testSubmitBusyRef.current = false; setToast("Your Supabase session expired. Sign in again to save this test."); return; }
+    const currentHistory = Array.isArray(authData.user.user_metadata?.test_history) ? authData.user.user_metadata.test_history : [];
+    const savedResult = {
+      subject, questionIds: testQuestions.map((item) => item.id), answers: testAnswers, reviewFlags: testReviewFlags,
+      answered, correct, incorrect, unanswered: testQuestions.length - answered,
+      accuracy: result.accuracy, score: result.score, completedAt,
+    };
+    const { data: updatedAuth, error: saveError } = await supabase.auth.updateUser({
+      data: { ...authData.user.user_metadata, test_history: [savedResult, ...currentHistory].slice(0, 5) },
+    });
+    if (saveError) { testSubmitBusyRef.current = false; setToast("Could not save this test to your Supabase account. Please try again."); return; }
+    setUser(updatedAuth.user);
     setSubmittedTest(result); setTestResultFilter("All"); setShowTestResultFilters(false); setTestHistory((history) => [result, ...history].slice(0, 5));
     setShowSubmitTest(false); setShowQuestionPalette(false); setTimerRunning(false); setTestInProgress(false); go("Test Results");
   };
@@ -894,51 +844,42 @@ export default function Page() {
   };
   const closeHabitForm = () => { setShowHabitForm(false); setEditingHabit(null); setHabitDraft(""); };
   const saveHabit = async () => {
+    if (!user) return setToast("Sign in to save your habits.");
     const name = habitDraft.trim();
     const target = Math.max(1, Math.min(999, Number.parseInt(habitTargetDraft, 10) || 1));
     const unit = habitUnitDraft.trim() || "time";
     if (!name) return;
     if (habits.some((item) => item.id !== editingHabit?.id && item.name.trim().toLowerCase() === name.toLowerCase())) return setToast("That habit already exists");
     setHabitBusy(true);
-    if (editingHabit && user && !user.is_demo) {
+    if (editingHabit) {
       const { data, error } = await supabase.from("habits").update({ name, target_amount: target, unit }).eq("id", editingHabit.id).eq("user_id", user.id).select("id, name, target_amount, unit").single();
       if (error) { setHabitBusy(false); return setToast("Could not update habit"); }
       setHabits((items) => items.map((item) => item.id === editingHabit.id ? { ...item, ...data } : item));
-    } else if (editingHabit) {
-      setHabits((items) => items.map((item) => item.id === editingHabit.id ? { ...item, name, target_amount: target, unit } : item));
-    } else if (user && !user.is_demo) {
+    } else {
       const { data, error } = await supabase.from("habits").insert({ user_id: user.id, name, target_amount: target, unit }).select("id, name, target_amount, unit").single();
       if (error) { setHabitBusy(false); return setToast(error.code === "23505" ? "That habit already exists" : "Could not save habit"); }
       setHabits((items) => [...items, { ...data, done: false }]);
-    } else {
-      setHabits((items) => [...items, { id: crypto.randomUUID(), name, target_amount: target, unit, done: false }]);
     }
     setHabitBusy(false);
     closeHabitForm();
     setToast(editingHabit ? "Habit updated" : "Habit added");
   };
   const deleteHabit = async (habit) => {
+    if (!user) return setToast("Sign in to update your habits.");
     setHabitMenuId(null);
     setHabitBusy(true);
-    if (user && !user.is_demo) {
-      const { error } = await supabase.from("habits").update({ active: false }).eq("id", habit.id).eq("user_id", user.id);
-      if (error) { setHabitBusy(false); return setToast("Could not remove habit"); }
-    }
+    const { error } = await supabase.from("habits").update({ active: false }).eq("id", habit.id).eq("user_id", user.id);
+    if (error) { setHabitBusy(false); return setToast("Could not remove habit"); }
     setHabits((items) => items.filter((item) => item.id !== habit.id));
-    if (!user || user.is_demo) setHabitLogs((items) => items.filter((log) => log.habit_id !== habit.id));
     if (consistencyHabit?.id === habit.id) setConsistencyHabit(null);
     setHabitBusy(false);
     setToast("Habit removed");
   };
   const setHabitCompletion = async (habit, completed) => {
+    if (!user) return setToast("Sign in to update your habits.");
     if (habit.done === completed || habitBusy) return;
     const previous = habit.done;
     setHabits((items) => items.map((item) => item.id === habit.id ? { ...item, done: completed } : item));
-    const log = { habit_id: habit.id, log_date: habitDateKey, completed };
-    if (!user || user.is_demo) {
-      setHabitLogs((items) => [...items.filter((item) => !(item.habit_id === habit.id && item.log_date === habitDateKey)), log]);
-      return;
-    }
     setHabitBusy(true);
     const result = await supabase.from("habit_logs").upsert({ user_id: user.id, habit_id: habit.id, log_date: habitDateKey, completed, amount: completed ? 1 : 0 }, { onConflict: "user_id,habit_id,log_date" });
     setHabitBusy(false);
@@ -950,21 +891,23 @@ export default function Page() {
     setNoteMenuId(null);
     setEditingNote(true);
   };
-  const saveNoteOrder = (items) => {
-    try { window.localStorage.setItem(`pyq-note-order:${user && !user.is_demo ? user.id : "local"}`, JSON.stringify(items.map((item) => item.id))); } catch {}
+  const saveNoteOrder = async (items) => {
+    if (!user) return;
+    const note_order = items.map((item) => item.id);
+    const { data, error } = await supabase.auth.updateUser({ data: { ...user.user_metadata, note_order } });
+    if (error) { setToast("Could not save note order."); return; }
+    setUser((current) => current ? { ...current, user_metadata: data.user.user_metadata } : current);
   };
   const moveNote = (sourceId, targetId) => {
     if (sourceId === targetId) return;
-    setNotes((items) => {
-      const from = items.findIndex((item) => String(item.id) === String(sourceId));
-      const to = items.findIndex((item) => String(item.id) === String(targetId));
-      if (from < 0 || to < 0 || from === to) return items;
-      const next = [...items];
-      const [moved] = next.splice(from, 1);
-      next.splice(to, 0, moved);
-      saveNoteOrder(next);
-      return next;
-    });
+    const from = notes.findIndex((item) => String(item.id) === String(sourceId));
+    const to = notes.findIndex((item) => String(item.id) === String(targetId));
+    if (from < 0 || to < 0 || from === to) return;
+    const next = [...notes];
+    const [moved] = next.splice(from, 1);
+    next.splice(to, 0, moved);
+    setNotes(next);
+    void saveNoteOrder(next);
   };
   const startNoteDrag = (event, noteId) => {
     if (event.pointerType === "mouse" || event.button !== 0) return;
@@ -1004,37 +947,32 @@ export default function Page() {
   const saveNote = async () => {
     const content = noteDraft.trim();
     if (!content) return;
+    if (!user) return setToast("Sign in to save your notes.");
     if (editingNoteId !== null) {
-      if (user && !user.is_demo) {
-        const { error } = await supabase.from("notes").update({ content }).eq("id", editingNoteId).eq("user_id", user.id);
-        if (error) return setToast("Could not update note. Please try again.");
-      }
+      const { error } = await supabase.from("notes").update({ content }).eq("id", editingNoteId).eq("user_id", user.id);
+      if (error) return setToast("Could not update note. Please try again.");
       setNotes((value) => value.map((item) => item.id === editingNoteId ? { ...item, text: content } : item));
       closeNoteEditor();
       setToast("Note updated");
       return;
     }
-    if (user && !user.is_demo) {
-      supabase.from("notes").insert({ user_id: user.id, content }).select("id, content, created_at").single().then(({ data, error }) => {
-        if (error) return setToast("Could not save note. Please try again.");
-        setNotes((value) => [{ id: data.id, text: data.content, date: new Date(data.created_at).toLocaleDateString("en-IN", { day: "numeric", month: "short" }) }, ...value]);
-        closeNoteEditor();
-        setToast("Note synced to your account");
-      });
-      return;
-    }
-    setNotes((value) => [{ id: Date.now(), text: content, date: new Date().toLocaleDateString("en-IN", { day: "numeric", month: "short" }) }, ...value]);
+    const { data, error } = await supabase.from("notes").insert({ user_id: user.id, content }).select("id, content, created_at").single();
+    if (error) return setToast("Could not save note. Please try again.");
+    const nextNotes = [{ id: data.id, text: data.content, date: new Date(data.created_at).toLocaleDateString("en-IN", { day: "numeric", month: "short" }) }, ...notes];
+    setNotes(nextNotes);
+    await saveNoteOrder(nextNotes);
     closeNoteEditor();
-    setToast("Note saved");
+    setToast("Note synced to your account");
   };
   const deleteNote = async (note) => {
     const title = notePlainText(note.text).split("\n")[0].slice(0, 42) || "this note";
     if (!window.confirm(`Delete “${title}”?`)) { setNoteMenuId(null); return; }
-    if (user && !user.is_demo) {
-      const { error } = await supabase.from("notes").delete().eq("id", note.id).eq("user_id", user.id);
-      if (error) { setNoteMenuId(null); return setToast("Could not delete note"); }
-    }
-    setNotes((value) => value.filter((item) => item.id !== note.id));
+    if (!user) { setNoteMenuId(null); return setToast("Sign in to delete your notes."); }
+    const { error } = await supabase.from("notes").delete().eq("id", note.id).eq("user_id", user.id);
+    if (error) { setNoteMenuId(null); return setToast("Could not delete note"); }
+    const nextNotes = notes.filter((item) => item.id !== note.id);
+    setNotes(nextNotes);
+    await saveNoteOrder(nextNotes);
     setNoteMenuId(null);
     setToast("Note deleted");
   };
@@ -1046,13 +984,14 @@ export default function Page() {
     go("Practice");
   };
   const toggleBookmark = async () => {
+    if (!user) return setToast("Sign in to save bookmarks.");
     const saved = bookmarks.includes(question.prompt);
-    setBookmarks((value) => saved ? value.filter((item) => item !== question.prompt) : [question.prompt, ...value]);
-    if (!user || user.is_demo || !question.id) return;
+    if (!question.id) return setToast("This question is not available in the Supabase question bank.");
     const result = saved
       ? await supabase.from("bookmarks").delete().eq("user_id", user.id).eq("question_id", question.id)
       : await supabase.from("bookmarks").insert({ user_id: user.id, question_id: question.id });
-    if (result.error) setToast("Bookmark sync failed");
+    if (result.error) return setToast("Bookmark sync failed");
+    setBookmarks((value) => saved ? value.filter((item) => item !== question.prompt) : [question.prompt, ...value]);
   };
   const submitAuth = async (event) => {
     event.preventDefault();
@@ -1062,20 +1001,6 @@ export default function Page() {
     const formData = new FormData(event.currentTarget);
     const email = String(formData.get("email") ?? "").trim().toLowerCase();
     const password = String(formData.get("password") ?? "");
-    if (AUTH_DEMO_MODE) {
-      if (!email || password.length < 8) { setAuthBusy(false); return setAuthError("Enter a valid email and a password with at least 8 characters."); }
-      if (authMode === "signup" && password !== String(formData.get("confirmPassword") ?? "")) {
-        setAuthBusy(false);
-        return setAuthError("The passwords don’t match. Check both fields and try again.");
-      }
-      const demoUser = { id: `demo-email:${email}`, email, created_at: new Date().toISOString(), is_demo: true, user_metadata: { full_name: email.split("@")[0] } };
-      localStorage.setItem(DEMO_USER_KEY, JSON.stringify(demoUser));
-      setUser(demoUser); setProfileName(demoUser.user_metadata.full_name); setAccountEmail(email); setAuthBusy(false);
-      setToast(authMode === "signup" ? "Demo account created on this device" : "Signed in on this device");
-      if (new URLSearchParams(window.location.search).get("next") === "/admin" && demoUser.email === "pyqcloud@gmail.com") { window.location.replace("/admin"); return; }
-      go(authMode === "signup" ? "About You" : "Home");
-      return;
-    }
     if (authMode === "signup" && password !== String(formData.get("confirmPassword") ?? "")) {
       setAuthBusy(false);
       return setAuthError("The passwords don’t match. Check both fields and try again.");
@@ -1145,14 +1070,6 @@ export default function Page() {
     } catch (error) { setAuthError(error.message || "Could not update your password. Request a fresh reset link and try again."); setAuthBusy(false); }
   };
   const signInWithGoogle = async () => {
-    if (AUTH_DEMO_MODE) {
-      const demoUser = { id: "demo-google:pyqcloud@gmail.com", email: "pyqcloud@gmail.com", created_at: new Date().toISOString(), is_demo: true, user_metadata: { full_name: "PYQ Cloud" } };
-      localStorage.setItem(DEMO_USER_KEY, JSON.stringify(demoUser));
-      setUser(demoUser); setProfileName("PYQ Cloud"); setAccountEmail(demoUser.email);
-      if (new URLSearchParams(window.location.search).get("next") === "/admin") { window.location.replace("/admin"); return; }
-      setToast("Demo Google sign-in: pyqcloud@gmail.com"); go("Home");
-      return;
-    }
     try {
       const next = new URLSearchParams(window.location.search).get("next");
       const redirectTo = new URL("/", window.location.origin);
@@ -1167,11 +1084,6 @@ export default function Page() {
     if (!/^\+91\d{10}$/.test(phone)) return setToast("Enter a valid 10-digit Indian mobile number.");
     setPhoneBusy(true);
     try {
-      if (AUTH_DEMO_MODE) {
-        setPhoneNumber(phone); setPhoneCode(""); setPhoneOtpError(false); setPhoneResendCountdown(30);
-        setToast("Demo mode: use OTP 123456"); go("Verify Phone");
-        return;
-      }
       const { error } = await supabase.auth.signInWithOtp({ phone, options: { shouldCreateUser: true } });
       if (error) throw error;
       setPhoneNumber(phone);
@@ -1192,15 +1104,6 @@ export default function Page() {
     setPhoneBusy(true);
     setPhoneOtpError(false);
     try {
-      if (AUTH_DEMO_MODE) {
-        if (phoneCode.trim() !== "123456") throw Object.assign(new Error("Incorrect code"), { status: 400 });
-        const demoUser = { id: `demo-phone:${phoneNumber}`, phone: phoneNumber, created_at: new Date().toISOString(), is_demo: true, user_metadata: { full_name: "" } };
-        localStorage.setItem(DEMO_USER_KEY, JSON.stringify(demoUser));
-        setUser(demoUser); setAccountEmail(""); setAccountPhone(phoneNumber); setPhoneOtpErrorMessage("Incorrect code. Check the code and try again.");
-        if (new URLSearchParams(window.location.search).get("next") === "/admin") { window.location.replace("/admin"); return; }
-        go("Phone Verified");
-        return;
-      }
       const { data, error } = await supabase.auth.verifyOtp({ phone: phoneNumber, token: phoneCode.trim(), type: "sms" });
       if (error) throw error;
       setUser(data.user ?? null);
@@ -1219,7 +1122,6 @@ export default function Page() {
     setPhoneBusy(true);
     setPhoneOtpError(false);
     try {
-      if (AUTH_DEMO_MODE) { setPhoneResendCountdown(30); setToast("Demo OTP is always 123456"); return; }
       const { error } = await supabase.auth.resend({ type: "sms", phone: phoneNumber });
       if (error) throw error;
       setPhoneResendCountdown(30);
@@ -1229,19 +1131,13 @@ export default function Page() {
   };
   const saveAboutYou = async (event) => {
     event.preventDefault();
+    if (!user) return setToast("Sign in with Supabase to save your profile.");
     const fullName = profileName.trim();
     if (!fullName) return setToast("Enter your name to continue.");
     const answers = { full_name: fullName, exam_attempts: aboutExamCount, target_year: aboutTargetYear, onboarding_completed: true };
-    if (user && !user.is_demo) {
-      const { error } = await supabase.auth.updateUser({ data: answers });
-      if (error) return setToast(error.message);
-      setUser((current) => current ? { ...current, user_metadata: { ...current.user_metadata, ...answers } } : current);
-    } else if (user?.is_demo) {
-      const updatedDemo = { ...user, user_metadata: { ...user.user_metadata, ...answers } };
-      localStorage.setItem(DEMO_USER_KEY, JSON.stringify(updatedDemo)); setUser(updatedDemo);
-    }
-    localStorage.setItem("pyq-onboarding", JSON.stringify(answers));
-    if (user?.id) localStorage.setItem(`pyq-onboarding:${user.id}`, "true");
+    const { error } = await supabase.auth.updateUser({ data: answers });
+    if (error) return setToast(error.message);
+    setUser((current) => current ? { ...current, user_metadata: { ...current.user_metadata, ...answers } } : current);
     setToast("Your profile is ready");
     go("Home");
   };
@@ -1250,10 +1146,6 @@ export default function Page() {
     if (!user) return setToast("Sign in to update your account settings.");
     const fullName = profileName.trim();
     try {
-      if (user.is_demo) {
-        const updatedDemo = { ...user, email: accountEmail.trim() || user.email || undefined, phone: accountPhone.trim() || user.phone, user_metadata: { ...user.user_metadata, full_name: fullName || user.user_metadata?.full_name || "" } };
-        localStorage.setItem(DEMO_USER_KEY, JSON.stringify(updatedDemo)); setUser(updatedDemo); setAccountEditing(false); setToast("Demo profile updated on this device"); return;
-      }
       const changes = { data: { ...user.user_metadata, ...(fullName ? { full_name: fullName } : {}) } };
       if (accountEmail.trim() && accountEmail.trim() !== user.email) changes.email = accountEmail.trim();
       if (accountPhone.trim() && accountPhone.trim() !== user.phone) changes.phone = accountPhone.trim();
@@ -1291,10 +1183,6 @@ export default function Page() {
     if (!user) return go("Auth");
     const fullName = profileName.trim();
     if (!fullName) return setToast("Enter your name to save your profile");
-    if (user.is_demo) {
-      const updatedDemo = { ...user, user_metadata: { ...user.user_metadata, full_name: fullName } };
-      localStorage.setItem(DEMO_USER_KEY, JSON.stringify(updatedDemo)); setUser(updatedDemo); setEditingProfile(false); setToast("Demo profile updated on this device"); return;
-    }
     const { error: authError } = await supabase.auth.updateUser({ data: { full_name: fullName } });
     if (authError) return setToast(authError.message);
     const { error: profileError } = await supabase.from("profiles").update({ full_name: fullName, updated_at: new Date().toISOString() }).eq("id", user.id);
@@ -1308,27 +1196,7 @@ export default function Page() {
     if (!file) return;
     if (!user) return setToast("Sign in to upload a profile photo.");
     if (!["image/jpeg", "image/png", "image/webp", "image/gif"].includes(file.type)) return setToast("Choose a JPG, PNG, WebP or GIF image");
-    const maxSize = user.is_demo ? 2 * 1024 * 1024 : 5 * 1024 * 1024;
-    if (file.size > maxSize) return setToast(`Choose an image smaller than ${user.is_demo ? "2" : "5"} MB`);
-    if (user.is_demo) {
-      setAvatarBusy(true);
-      try {
-        const dataUrl = await new Promise((resolve, reject) => {
-          const reader = new FileReader();
-          reader.onload = () => typeof reader.result === "string" ? resolve(reader.result) : reject(new Error("Could not read this image"));
-          reader.onerror = () => reject(new Error("Could not read this image"));
-          reader.readAsDataURL(file);
-        });
-        localStorage.setItem(`pyq-demo-avatar:${user.id}`, dataUrl);
-        setAvatarUrl(dataUrl);
-        setToast("Profile photo saved on this device");
-      } catch {
-        setToast("Could not save this photo. Choose a smaller image and try again.");
-      } finally {
-        setAvatarBusy(false);
-      }
-      return;
-    }
+    if (file.size > 5 * 1024 * 1024) return setToast("Choose an image smaller than 5 MB");
     setAvatarBusy(true);
     try {
       const extension = file.name.split(".").pop()?.toLowerCase().replace(/[^a-z0-9]/g, "") || "jpg";
@@ -1352,7 +1220,11 @@ export default function Page() {
   const setTimerDuration = (value) => {
     const next = Math.min(999, Math.max(1, Math.round(Number(value) || 1)));
     setTimerMinutes(next); setTimerDurationDraft(String(next)); setSeconds(next * 60);
-    if (mode === "Pomodoro") { setFocusMinutes(next); window.localStorage.setItem("pyq-focus-duration-minutes", JSON.stringify(next)); }
+    if (mode === "Pomodoro") {
+      setFocusMinutes(next);
+      if (user) supabase.auth.updateUser({ data: { focus_duration_minutes: next } }).then(({ error }) => { if (error) setToast("Could not save timer settings to your account."); });
+      else setToast("Sign in to save timer settings across devices.");
+    }
   };
   const timerProgress = mode === "Stopwatch" ? 100 : Math.min(100, Math.max(0, (seconds / Math.max(1, timerMinutes * 60)) * 100));
   const meditationProgress = Math.min(100, Math.max(0, (meditationSeconds / Math.max(1, meditationMinutes * 60)) * 100));
@@ -1387,9 +1259,9 @@ export default function Page() {
         <div className="welcome-feature-row">{[[figmaAsset.subject, "PYQs"], [figmaAsset.habits, "Habits"], [figmaAsset.notes, "Notes"], [figmaAsset.meditation, "Meditation"]].map(([asset, label], index) => <Fragment key={label}>{index === 1 && <i aria-hidden="true">+</i>}<span className={index === 0 ? "featured" : ""}><img src={asset} alt="" />{label}</span></Fragment>)}</div>
         <div className="welcome-actions"><strong>Get started</strong><button className="google-auth-button" onClick={signInWithGoogle}><span className="google-g" aria-hidden="true"><svg viewBox="0 0 48 48"><path fill="#4285F4" d="M43.6 24.5c0-1.4-.1-2.8-.4-4.1H24v7.8h11c-.5 2.6-2 4.9-4.3 6.4v5.3h7c4.1-3.8 6.5-9.3 6.5-15.4z"/><path fill="#34A853" d="M24 44c5.9 0 10.8-2 14.4-5.4l-7-5.3c-1.9 1.3-4.4 2-7.4 2-5.7 0-10.5-3.8-12.2-9H4.6v5.5C8.2 39.3 15.5 44 24 44z"/><path fill="#FBBC05" d="M11.8 26.3c-.4-1.3-.7-2.7-.7-4.3s.2-3 .7-4.3v-5.5H4.6C3.1 15.2 2.2 18.4 2.2 22s.9 6.8 2.4 9.8l7.2-5.5z"/><path fill="#EA4335" d="M24 10.7c3.2 0 6 1.1 8.2 3.2l6.1-6.1C34.8 4.4 29.9 2 24 2 15.5 2 8.2 6.7 4.6 13.8l7.2 5.5c1.7-5.2 6.5-8.6 12.2-8.6z"/></svg></span>Continue with Google</button><button className="phone-auth-button" onClick={() => go("Phone Auth")}><span aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M6.6 10.8c1.4 2.8 3.8 5.2 6.6 6.6l2.2-2.2c.3-.3.7-.4 1.1-.3 1.2.4 2.5.6 3.8.6.6 0 1 .4 1 1V20c0 .6-.4 1-1 1C10 21 3 14 3 5c0-.6.4-1 1-1h3.5c.6 0 1 .4 1 1 0 1.3.2 2.6.6 3.8.1.4 0 .8-.3 1.1z"/></svg></span>Continue with Phone</button><button className="welcome-email-link" onClick={() => { setAuthMode("signin"); setAuthError(""); setAuthNotice(""); go("Auth"); }}>Sign in or create an account with email</button><small>By continuing, you agree to our <button onClick={() => setToast("Terms and privacy details will be added by the client.")}>Terms &amp; Privacy Policy.</button></small></div>
       </section>}
-      {screen === "Phone Auth" && <Content className="phone-auth-page" title="Continue with phone" subtitle="We’ll text you a one-time verification code." back={() => go("Welcome")} character="happy"><form className="phone-auth-form" onSubmit={sendPhoneCode}><label htmlFor="phone-number">Phone number</label><div className={`phone-number-field ${phoneNumber.replace(/^\+91/, "").length === 10 ? "valid" : ""}`}><span>+91</span><input id="phone-number" type="tel" inputMode="numeric" autoComplete="tel-national" value={phoneNumber.replace(/^\+91/, "").replace(/^(\d{5})(\d{5})$/, "$1 $2")} onChange={(event) => { let digits = event.target.value.replace(/\D/g, ""); if (digits.startsWith("0091") && digits.length > 10) digits = digits.slice(4); else if (digits.startsWith("91") && digits.length > 10) digits = digits.slice(2); else if (digits.startsWith("0") && digits.length === 11) digits = digits.slice(1); setPhoneNumber(`+91${digits.slice(0, 10)}`); }} placeholder="Enter 10-digit phone number" required /></div><small>{AUTH_DEMO_MODE ? "Local demo: enter any valid number. Use OTP 123456." : "Standard SMS charges may apply."}</small><button className="primary-button full-button" type="submit" disabled={phoneBusy || phoneNumber.replace(/^\+91/, "").length !== 10}>{phoneBusy ? "Sending code…" : "Send verification code"}</button><small className="phone-security-note"><span aria-hidden="true">♢</span> Your number is used to secure your account.</small></form></Content>}
+      {screen === "Phone Auth" && <Content className="phone-auth-page" title="Continue with phone" subtitle="We’ll text you a one-time verification code." back={() => go("Welcome")} character="happy"><form className="phone-auth-form" onSubmit={sendPhoneCode}><label htmlFor="phone-number">Phone number</label><div className={`phone-number-field ${phoneNumber.replace(/^\+91/, "").length === 10 ? "valid" : ""}`}><span>+91</span><input id="phone-number" type="tel" inputMode="numeric" autoComplete="tel-national" value={phoneNumber.replace(/^\+91/, "").replace(/^(\d{5})(\d{5})$/, "$1 $2")} onChange={(event) => { let digits = event.target.value.replace(/\D/g, ""); if (digits.startsWith("0091") && digits.length > 10) digits = digits.slice(4); else if (digits.startsWith("91") && digits.length > 10) digits = digits.slice(2); else if (digits.startsWith("0") && digits.length === 11) digits = digits.slice(1); setPhoneNumber(`+91${digits.slice(0, 10)}`); }} placeholder="Enter 10-digit phone number" required /></div><small>Use OTP 123456 for Supabase test phone numbers.</small><button className="primary-button full-button" type="submit" disabled={phoneBusy || phoneNumber.replace(/^\+91/, "").length !== 10}>{phoneBusy ? "Sending code…" : "Send verification code"}</button><small className="phone-security-note"><span aria-hidden="true">♢</span> Your number is used to secure your account.</small></form></Content>}
       {screen === "Verify Phone" && <Content className="phone-auth-page verify-phone-page" title={phoneBusy ? "Verifying your number" : "Verify your number"} subtitle={phoneBusy ? "Securely checking your one-time code." : `Enter the 6-digit code sent to ${formatIndianPhone(phoneNumber)}.`} back={() => go("Phone Auth")}><form className="phone-auth-form verify-phone-form" onSubmit={verifyPhoneCode}><label htmlFor="phone-code">Verification code</label><div className={`otp-code-boxes ${phoneOtpError ? "error" : ""}`} onClick={() => document.getElementById("phone-code")?.focus()}><input id="phone-code" type="text" inputMode="numeric" autoComplete="one-time-code" maxLength={6} value={phoneCode} onChange={(event) => { setPhoneCode(event.target.value.replace(/\D/g, "").slice(0, 6)); setPhoneOtpError(false); }} aria-label="Six-digit verification code" disabled={phoneBusy} /><div aria-hidden="true">{Array.from({length:6},(_,index)=><span key={index} className={index === phoneCode.length && !phoneOtpError ? "active" : ""}>{phoneCode[index] || ""}</span>)}</div></div>{phoneOtpError && <small className="otp-error" role="alert">{phoneOtpErrorMessage}</small>}<button className="primary-button full-button" type="submit" disabled={phoneBusy || phoneCode.length !== 6}>{phoneBusy && <span className="auth-spinner" aria-hidden="true" />}{phoneBusy ? "Verifying…" : "Verify & Continue"}</button></form><button className="wrong-number-link" onClick={() => { setPhoneCode(""); setPhoneOtpError(false); setPhoneOtpErrorMessage("Incorrect code. Check the code and try again."); go("Phone Auth"); }}>Wrong number? <span>Change phone number</span></button><button className="resend-code-link" onClick={resendPhoneCode} disabled={phoneResendCountdown > 0 || phoneBusy}>{phoneResendCountdown > 0 ? `Resend code in ${formatTime(phoneResendCountdown)}` : "Didn’t get the code? Resend OTP"}</button></Content>}
-      {screen === "Phone Verified" && <section className="phone-verified-page"><div className="phone-verified-content"><div className="phone-verified-mascot" aria-hidden="true"><Lottie src="/mascot-lottie/cloudy-happy-jump.json" autoplay loop /></div><h1>Phone verified!</h1><p>Your phone number has been verified successfully.</p></div><button className="primary-button full-button" onClick={() => go(isDemoAdminUser(user) || user?.user_metadata?.full_name || hasCompletedOnboarding(user) ? "Home" : "About You")}>Continue</button></section>}
+      {screen === "Phone Verified" && <section className="phone-verified-page"><div className="phone-verified-content"><div className="phone-verified-mascot" aria-hidden="true"><Lottie src="/mascot-lottie/cloudy-happy-jump.json" autoplay loop /></div><h1>Phone verified!</h1><p>Your phone number has been verified successfully.</p></div><button className="primary-button full-button" onClick={() => go(hasCompletedOnboarding(user) ? "Home" : "About You")}>Continue</button></section>}
       {screen === "Home" && <header className="topbar">
         <button className="icon-button" aria-label="Open menu" onClick={() => setDrawer(true)}><img src={figmaAsset.menu} alt="" /></button>
         <div className="brand-word"><img src="/brand/cloud-ai-logo.png" alt="" /><span className="brand-title"><span>PYQ</span> <em>Cloud</em></span></div>
@@ -1423,7 +1295,7 @@ export default function Page() {
       {screen === "Random Practice" && <Content className="random-practice-page" title="Random Practice" subtitle="Challenge yourself with PYQs from all UPSC subjects." back={() => go("Home")} character="reading"><div className="random-intro">Use this mode if you are super confident about PYQs!</div><label className="random-field-label" htmlFor="random-count">Number of questions</label><QuestionCountControl id="random-count" value={randomCount} onChange={(event) => setRandomCount(Math.min(100, Math.max(5, Number(event.target.value) || 5)))} onDecrease={() => setRandomCount((value) => Math.max(5, value - 5))} onIncrease={() => setRandomCount((value) => Math.min(100, value + 5))} /><label className="attempted-toggle"><input type="checkbox" checked={includeAttempted} onChange={(event) => setIncludeAttempted(event.target.checked)} /><span>Include questions that I have already attempted.</span></label><PracticeStartButton onClick={() => startPractice("Mixed Practice")} /></Content>}
 
       {screen === "Practice" && !questionList.length && <Content title={`${subject} Practice`} subtitle="Questions are being added" back={() => setShowEndPracticeDialog(true)}><Empty icon="▤" title="No questions in this set yet" text="Try another subject or year. The PYQ Cloud question bank will appear here as the client content is loaded." /></Content>}
-      {screen === "Practice" && practiceFinished && <Content title="Practice set complete" subtitle="You have reached the end of this set." back={() => setShowEndPracticeDialog(true)}><div className="question-card practice-complete-card"><h2>Practice complete</h2><p>{questionList.length} {questionList.length === 1 ? "question was" : "questions were"} in this set. {question.isDemo ? "This was a demo question; the complete question bank has not been loaded here yet." : "Choose another set to continue practicing."}</p></div><button className="primary-button full-button" onClick={() => go(practiceReturnScreen)}>Choose another practice set <span>→</span></button></Content>}
+      {screen === "Practice" && practiceFinished && <Content title="Practice set complete" subtitle="You have reached the end of this set." back={() => setShowEndPracticeDialog(true)}><div className="question-card practice-complete-card"><h2>Practice complete</h2><p>{questionList.length} {questionList.length === 1 ? "question was" : "questions were"} in this set. Choose another set to continue practicing.</p></div><button className="primary-button full-button" onClick={() => go(practiceReturnScreen)}>Choose another practice set <span>→</span></button></Content>}
       {screen === "Practice" && !practiceFinished && questionList.length > 0 && <PracticeQuestionScreen
         question={question}
         questionIndex={questionIndex}
@@ -1563,10 +1435,10 @@ export default function Page() {
       {screen === "Streaks with Cloudy" && <Content className="streak-page" title="Streak" subtitle="Track your learning journey." back={() => go("Home")} character="happy"><button className="streak-info-button" aria-label="How streaks work" onClick={() => setToast("Practice 15 or more questions each day to keep your streak")}>ⓘ</button><section className="streak-current-card"><div className="streak-card-top"><div><small><img className="streak-metric-icon" src="/streak-assets/flame.png" alt="" />Current Streak</small><strong>{analytics.streak} <span>days</span></strong><p>Keep it going{displayName ? `, ${displayName}` : ""}! ✨</p></div><div><small><img className="streak-metric-icon" src="/streak-assets/flame.png" alt="" />{analytics.bestStreak} days</small><b>Best Streak</b></div></div><div className="streak-week">{Array.from({length:7},(_,index)=>{const date=new Date();date.setDate(date.getDate()-(6-index));const dayKey=date.toLocaleDateString("en-CA");const completed=qualifiesForStreak(attemptHistory, dayKey);return <span key={dayKey} className={completed?"done":""}><i>✓</i><small>{index===6?"Today":date.toLocaleDateString("en-US",{weekday:"short"})}</small></span>;})}</div></section><section className="streak-how-card"><span className="streak-how-icon" aria-hidden="true"><img src="/streak-assets/chart.png" alt="" /></span><div className="streak-how-copy"><b>How streak works</b><p>Your streak is counted as valid when you practice <strong>15 questions or more everyday.</strong></p><hr aria-hidden="true" /><small>Complete 15 or more questions in a day to keep your streak alive.</small><small>If you miss a day, your streak resets to 0.</small></div><img className="streak-how-illustration" src="/streak-assets/clipboard.png" alt="" /></section></Content>}
       {screen === "CSR Activity" && <Content className="impact-page" title="" subtitle="" back={() => go("Home")}><div className="impact-title"><span>♡</span><h1>Social Impact</h1></div><div className="impact-info-card">{[["♧","How it works","A portion of app’s revenue goes towards funding the education of underprivileged children."],["♧","100% Transparent","We are committed to publish every transaction and donation receipt on our website."],["♧","Partner Organizations","We donate only to government-registered NGOs and Orphanages."]].map(([glyph,title,description])=><div className="impact-info-row" key={title}><span>{glyph}</span><div><b>{title}</b><p>{description}</p></div></div>)}</div><section className="impact-founder-card"><span className="impact-quote-mark">“</span><h2>Note from the Founder</h2><p>As UPSC aspirants, we all dream of serving the nation someday. But service doesn’t have to wait. For you, it’s simply subscribing to the app and practicing PYQs. Behind the scenes, a portion of our revenue helps fund the education of those who cannot afford it. Please visit our website for more information.</p><div><span>♡</span><small>With love and care,<b>Vimanyu Chaturvedi.</b></small></div></section><button className="impact-website-button" onClick={() => setToast("Website link will be added by the client")}>Visit our website <span>↗</span></button></Content>}
 
-      {screen === "About You" && <Content className="about-you-page" title="A little about you" subtitle="We’ll tailor your UPSC preparation to your goals." back={() => go("Welcome")} character><form className="about-you-form" onSubmit={saveAboutYou}><label className="about-name-field" htmlFor="about-name">Your name<span className="about-input-wrap"><img src={figmaAsset.profile} alt="" /><input id="about-name" value={profileName} onChange={(event) => setProfileName(event.target.value)} placeholder="Enter your name" maxLength={80} required /></span></label><fieldset><legend>How many attempts have you taken?</legend><div className="about-choice-row">{["0", "1", "2", "3+"].map((value) => <button type="button" key={value} className={aboutExamCount === value ? "selected" : ""} onClick={() => setAboutExamCount(value)}>{value}</button>)}</div></fieldset><label className="about-year-field">Target exam year<span className="about-input-wrap"><span aria-hidden="true">▣</span><select value={aboutTargetYear} onChange={(event) => setAboutTargetYear(event.target.value)}><option value="">Select your target year</option>{designYears.slice(0, 10).map((year) => <option key={year}>{year}</option>)}</select></span></label><div className="about-tip"><span>✦</span><p><b>Made for your preparation</b><small>Your selections help personalize your study recommendations and progress.</small></p></div><button className="primary-button full-button" type="submit">Start My Preparation</button></form></Content>}
+      {screen === "About You" && <Content className="about-you-page" title="A little about you" subtitle="We’ll tailor your UPSC preparation to your goals." back={() => go("Welcome")} character><form className="about-you-form" onSubmit={saveAboutYou}><label className="about-name-field" htmlFor="about-name">Your name<span className="about-input-wrap"><img src={figmaAsset.profile} alt="" /><input id="about-name" value={profileName} onChange={(event) => setProfileName(event.target.value)} placeholder="Enter your name" maxLength={80} required /></span></label><fieldset><legend>How many attempts have you taken?</legend><div className="about-choice-row">{["0", "1", "2", "3+"].map((value) => <button type="button" key={value} className={aboutExamCount === value ? "selected" : ""} onClick={() => setAboutExamCount(value)}>{value}</button>)}</div></fieldset><label className="about-year-field">Target exam year<span className="about-input-wrap"><span aria-hidden="true">▣</span><select value={aboutTargetYear} onChange={(event) => setAboutTargetYear(event.target.value)}><option value="">Select your target year</option>{availableYears.slice(0, 10).map((year) => <option key={year}>{year}</option>)}</select></span></label><div className="about-tip"><span>✦</span><p><b>Made for your preparation</b><small>Your selections help personalize your study recommendations and progress.</small></p></div><button className="primary-button full-button" type="submit">Start My Preparation</button></form></Content>}
       {screen === "Refer & Earn" && <Content className="referral-page" title="Refer & Earn" subtitle="Share the benefits. Earn more study time." back={() => go("My Profile")}><div className="referral-hero"><span className="referral-gift" aria-hidden="true">🎁</span><div className="referral-offers"><article><small>GIVE 20% OFF</small><b>Your friend<br /><em>20% off</em><br />their yearly plan</b></article><article><small>GET REWARDED</small><b>You receive<br /><em>1 month</em><br />per successful referral</b></article></div><p>Your reward applies after your friend subscribes.</p></div><div className="referral-code-card"><div><small>Your referral code</small><b>{referralCode}</b></div><button onClick={copyReferralCode}><span aria-hidden="true">▢</span> Copy</button></div><button className="primary-button full-button referral-share" onClick={shareReferral}><span aria-hidden="true">↗</span> Invite Friends Now</button><section className="referral-steps"><h2>How it works</h2>{[["↗", "Invite your friends", "Share your unique code via WhatsApp or any other platform."], ["♙", "Your friend subscribes", "They get 20% off on a yearly plan if eligible."], ["✦", "You get rewarded", "You receive 1 extra month for every successful referral."]].map(([symbol, title, body]) => <div key={title}><span>{symbol}</span><p><b>{title}</b><br />{body}</p></div>)}</section><div className="referral-results"><div><span>✧</span><small>Successful Referrals</small><b>0</b></div><i /><div><span>♛</span><small>Months Earned</small><b>0</b></div></div></Content>}
-      {screen === "Account Settings" && <Content className="account-settings-page" title="Account Settings" subtitle="Your information and security" back={() => go("My Profile")} character><form onSubmit={saveAccountSettings}><h2 className="account-section-label">PERSONAL INFORMATION</h2><div className="account-info-card"><label><span>♙</span><small>Name<input disabled={!accountEditing} value={profileName} onChange={(event) => setProfileName(event.target.value)} /></small><button type="button" aria-label="Edit name" onClick={() => setAccountEditing(true)}>✎</button></label><label><span>✉</span><small>Email<input disabled={!accountEditing} type="email" value={accountEmail} onChange={(event) => setAccountEmail(event.target.value)} placeholder={user?.phone && !user?.email ? "Add an email address" : ""} /></small><button type="button" aria-label="Edit email" onClick={() => setAccountEditing(true)}>✎</button></label><label><span>♧</span><small>Phone<input disabled={!accountEditing} type="tel" value={accountPhone} onChange={(event) => setAccountPhone(event.target.value)} placeholder="Add a phone number" /></small><button type="button" aria-label="Edit phone number" onClick={() => setAccountEditing(true)}>✎</button></label></div>{accountEditing && <button className="primary-button full-button" type="submit">Save changes</button>}</form><h2 className="account-section-label">ACCOUNT ACTIONS</h2><div className="account-action-card"><button onClick={async () => { if (user?.is_demo) { localStorage.removeItem(DEMO_USER_KEY); setUser(null); go("Welcome"); return; } const { error } = await supabase.auth.signOut(); if (error) return setToast(error.message); go("Welcome"); }}><span>⇥</span><b>Sign out</b><i>›</i></button><button onClick={() => setToast("Privacy and security settings will be available here.")}><span>♢</span><b>Privacy and security</b><i>›</i></button></div><h2 className="account-section-label danger-label">DANGER ZONE</h2><button className="delete-account-card" onClick={() => setToast("Contact support to request account deletion.")}><span>♜</span><span><b>Delete account</b><small>Permanently remove your account and data</small></span><i>›</i></button></Content>}
-      {screen === "My Profile" && <Content className="profile-page" title="My Profile" subtitle="Manage Profile" back={() => go("Home")}><div className="profile-card">{avatarUrl ? <img className="profile-photo" src={avatarUrl} alt={`${displayName || "Your"} profile photo`} /> : <span className="profile-photo profile-photo-placeholder" aria-hidden="true"><img src={figmaAsset.profile} alt="" /></span>}<h2>{displayName || "Enter your name"}</h2><p>{user?.email || user?.phone || "Email not added"}</p>{user?.phone && !user?.email && <button type="button" className="profile-email-action" onClick={() => { setAccountEmail(""); setAccountPhone(user.phone); setAccountEditing(true); go("Account Settings"); }}>Add email address</button>}<small className="member-since">{user?.created_at ? `Member since ${new Date(user.created_at).toLocaleDateString("en-IN", { month: "short", year: "numeric" })}` : ""}</small>{user ? <><button type="button" className="outline-button avatar-upload-button" onClick={() => avatarInputRef.current?.click()} disabled={avatarBusy}>{avatarBusy ? "Uploading photo…" : "Change profile photo"}</button><input ref={avatarInputRef} className="avatar-file-input" type="file" accept="image/jpeg,image/png,image/webp,image/gif" onChange={uploadAvatar} disabled={avatarBusy} aria-label="Choose a profile photo" /><button className="outline-button" onClick={() => setEditingProfile((value) => !value)}>{editingProfile ? "Cancel" : "Edit profile"}</button></> : <button className="outline-button" onClick={() => go("Welcome")}>Sign in to change photo</button>}{editingProfile && <form className="auth-form" onSubmit={saveProfile}><label htmlFor="profile-name">Full name</label><input id="profile-name" value={profileName} onChange={(event) => setProfileName(event.target.value)} maxLength={80} required /><button className="primary-button full-button" type="submit">Save profile <span>→</span></button></form>}</div><div className="profile-row"><span>✉</span><div><small>{user?.email ? "EMAIL" : user?.phone ? "PHONE" : "CONTACT"}</small><b>{user?.email || user?.phone || (user ? "Email not added" : "Not signed in")}</b></div>{user && <span>✓</span>}</div><div className="profile-row"><span>◷</span><div><small>MEMBERSHIP</small><b>Free account</b></div><button className="text-action" onClick={() => go("Subscription")}>View plans</button></div><div className="section-heading"><h3>Account Settings</h3></div>{[["♙", "Account Settings", "Manage your personal information"], ["♧", "Refer & Earn", "Invite your friends and earn rewards"], ["▣", "Terms & Policy", "Read our terms and privacy policy"], ["?", "Help & Support", "Get help and contact support"]].map(([glyph, item, subtitle]) => <button className="choice-row" key={item} onClick={() => item === "Account Settings" || item === "Refer & Earn" ? go(item) : setToast(`${item} will be available here.`)}><span className="profile-setting-icon">{glyph}</span><span><b>{item}</b><small>{subtitle}</small></span><span className="chevron">›</span></button>)}{user ? <button className="quiet-link" onClick={async () => { if (user.is_demo) { localStorage.removeItem(DEMO_USER_KEY); setUser(null); setProfileName(""); setAccountEmail(""); resetNavigation("Welcome"); return; } const { error } = await supabase.auth.signOut(); if (error) return setToast(error.message); setToast("You’ve signed out"); }}>Sign out</button> : <button className="quiet-link" onClick={() => go("Welcome")}>Sign in or create account</button>}</Content>}
+      {screen === "Account Settings" && <Content className="account-settings-page" title="Account Settings" subtitle="Your information and security" back={() => go("My Profile")} character><form onSubmit={saveAccountSettings}><h2 className="account-section-label">PERSONAL INFORMATION</h2><div className="account-info-card"><label><span>♙</span><small>Name<input disabled={!accountEditing} value={profileName} onChange={(event) => setProfileName(event.target.value)} /></small><button type="button" aria-label="Edit name" onClick={() => setAccountEditing(true)}>✎</button></label><label><span>✉</span><small>Email<input disabled={!accountEditing} type="email" value={accountEmail} onChange={(event) => setAccountEmail(event.target.value)} placeholder={user?.phone && !user?.email ? "Add an email address" : ""} /></small><button type="button" aria-label="Edit email" onClick={() => setAccountEditing(true)}>✎</button></label><label><span>♧</span><small>Phone<input disabled={!accountEditing} type="tel" value={accountPhone} onChange={(event) => setAccountPhone(event.target.value)} placeholder="Add a phone number" /></small><button type="button" aria-label="Edit phone number" onClick={() => setAccountEditing(true)}>✎</button></label></div>{accountEditing && <button className="primary-button full-button" type="submit">Save changes</button>}</form><h2 className="account-section-label">ACCOUNT ACTIONS</h2><div className="account-action-card"><button onClick={async () => { const { error } = await supabase.auth.signOut(); if (error) return setToast(error.message); go("Welcome"); }}><span>⇥</span><b>Sign out</b><i>›</i></button><button onClick={() => setToast("Privacy and security settings will be available here.")}><span>♢</span><b>Privacy and security</b><i>›</i></button></div><h2 className="account-section-label danger-label">DANGER ZONE</h2><button className="delete-account-card" onClick={() => setToast("Contact support to request account deletion.")}><span>♜</span><span><b>Delete account</b><small>Permanently remove your account and data</small></span><i>›</i></button></Content>}
+      {screen === "My Profile" && <Content className="profile-page" title="My Profile" subtitle="Manage Profile" back={() => go("Home")}><div className="profile-card">{avatarUrl ? <img className="profile-photo" src={avatarUrl} alt={`${displayName || "Your"} profile photo`} /> : <span className="profile-photo profile-photo-placeholder" aria-hidden="true"><img src={figmaAsset.profile} alt="" /></span>}<h2>{displayName || "Enter your name"}</h2><p>{user?.email || user?.phone || "Email not added"}</p>{user?.phone && !user?.email && <button type="button" className="profile-email-action" onClick={() => { setAccountEmail(""); setAccountPhone(user.phone); setAccountEditing(true); go("Account Settings"); }}>Add email address</button>}<small className="member-since">{user?.created_at ? `Member since ${new Date(user.created_at).toLocaleDateString("en-IN", { month: "short", year: "numeric" })}` : ""}</small>{user ? <><button type="button" className="outline-button avatar-upload-button" onClick={() => avatarInputRef.current?.click()} disabled={avatarBusy}>{avatarBusy ? "Uploading photo…" : "Change profile photo"}</button><input ref={avatarInputRef} className="avatar-file-input" type="file" accept="image/jpeg,image/png,image/webp,image/gif" onChange={uploadAvatar} disabled={avatarBusy} aria-label="Choose a profile photo" /><button className="outline-button" onClick={() => setEditingProfile((value) => !value)}>{editingProfile ? "Cancel" : "Edit profile"}</button></> : <button className="outline-button" onClick={() => go("Welcome")}>Sign in to change photo</button>}{editingProfile && <form className="auth-form" onSubmit={saveProfile}><label htmlFor="profile-name">Full name</label><input id="profile-name" value={profileName} onChange={(event) => setProfileName(event.target.value)} maxLength={80} required /><button className="primary-button full-button" type="submit">Save profile <span>→</span></button></form>}</div><div className="profile-row"><span>✉</span><div><small>{user?.email ? "EMAIL" : user?.phone ? "PHONE" : "CONTACT"}</small><b>{user?.email || user?.phone || (user ? "Email not added" : "Not signed in")}</b></div>{user && <span>✓</span>}</div><div className="profile-row"><span>◷</span><div><small>MEMBERSHIP</small><b>Free account</b></div><button className="text-action" onClick={() => go("Subscription")}>View plans</button></div><div className="section-heading"><h3>Account Settings</h3></div>{[["♙", "Account Settings", "Manage your personal information"], ["♧", "Refer & Earn", "Invite your friends and earn rewards"], ["▣", "Terms & Policy", "Read our terms and privacy policy"], ["?", "Help & Support", "Get help and contact support"]].map(([glyph, item, subtitle]) => <button className="choice-row" key={item} onClick={() => item === "Account Settings" || item === "Refer & Earn" ? go(item) : setToast(`${item} will be available here.`)}><span className="profile-setting-icon">{glyph}</span><span><b>{item}</b><small>{subtitle}</small></span><span className="chevron">›</span></button>)}{user ? <button className="quiet-link" onClick={async () => { const { error } = await supabase.auth.signOut(); if (error) return setToast(error.message); setProfileName(""); setAccountEmail(""); resetNavigation("Welcome"); }}>Sign out</button> : <button className="quiet-link" onClick={() => go("Welcome")}>Sign in or create account</button>}</Content>}
 
       {screen === "Auth" && <Content title={authMode === "signup" ? "Create your account" : "Welcome to PYQ Cloud"} subtitle={authMode === "signup" ? "Sign up to save your progress and study data." : "Sign in to keep your learning in sync."} back={() => go("Welcome")}><div className="auth-card"><div className="auth-symbol">☁</div><h2>{authMode === "signup" ? "Start your preparation." : "Make every session count."}</h2><p>{authMode === "signup" ? "Create an account to keep your learning in sync." : "Save your progress and pick up wherever you left off."}</p>{authError && <p className="auth-feedback error" role="alert">{authError}</p>}{authNotice && <p className="auth-feedback" role="status">{authNotice}</p>}<form className="auth-form" onSubmit={submitAuth}><label htmlFor="email">Email address</label><input id="email" name="email" type="email" autoComplete="email" value={authEmail} onChange={(event) => setAuthEmail(event.target.value)} placeholder="you@example.com" required /><label htmlFor="password">Password</label><input id="password" name="password" type="password" autoComplete={authMode === "signup" ? "new-password" : "current-password"} minLength="8" placeholder="At least 8 characters" required />{authMode === "signup" && <><label htmlFor="confirm-password">Confirm password</label><input id="confirm-password" name="confirmPassword" type="password" autoComplete="new-password" minLength="8" placeholder="Enter your password again" required /></>}<button className="primary-button full-button" type="submit" disabled={authBusy}>{authBusy ? "Please wait…" : authMode === "signup" ? "Create account" : "Sign in"} <span>→</span></button></form>{authMode === "signin" && <button className="auth-inline-link" onClick={() => { setAuthError(""); setAuthNotice(""); go("Reset Password"); }}>Forgot password?</button>}<button className="quiet-link" onClick={() => { setAuthMode((value) => value === "signup" ? "signin" : "signup"); setAuthError(""); setAuthNotice(""); }}>{authMode === "signup" ? "Already have an account? Sign in" : "New here? Create an account"}</button><small className="auth-note">Your account and study data sync securely through Supabase.</small></div></Content>}
       {screen === "Auth Confirmation" && <Content title="Check your email" subtitle="One quick step to activate your account." back={() => go("Auth")}><div className="auth-card"><div className="auth-symbol">✉</div><h2>Confirm your email</h2><p className="auth-feedback" role="status">{authNotice || `We sent a confirmation link to ${authEmail}. Open it to activate your account, then come back here to sign in.`}</p>{authError && <p className="auth-feedback error" role="alert">{authError}</p>}<button className="primary-button full-button" onClick={() => { setAuthMode("signin"); setAuthError(""); setAuthNotice(""); go("Auth"); }}>Continue to sign in <span>→</span></button><button className="quiet-link" onClick={resendSignupConfirmation} disabled={authBusy}>{authBusy ? "Sending…" : "Resend confirmation email"}</button></div></Content>}

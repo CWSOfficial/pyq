@@ -80,6 +80,11 @@ function plainText(html) {
     .trim();
 }
 
+function questionFingerprint(question) {
+  const normalize = (value) => plainText(String(value || "")).normalize("NFKC").toLocaleLowerCase().replace(/[^\p{L}\p{N}]+/gu, " ").trim().replace(/\s+/g, " ");
+  return `${Number(question.year)}|${normalize(question.subject)}|${normalize(question.prompt)}`;
+}
+
 function questionFromSource(item, sectionName, index) {
   const english = item?.content?.en;
   const subject = cleanString(item?.pyq?.subject?.title || item?.subject, 120);
@@ -202,10 +207,31 @@ export async function POST(request) {
   let rows;
   try { rows = parseInput(body); } catch (error) { return response({ error: error.message }, 400); }
 
-  const { data, error } = await auth.database.from("questions").upsert(rows, { onConflict: "id" }).select("id");
+  const years = [...new Set(rows.map((row) => row.year))];
+  const existingFingerprints = new Set();
+  for (let offset = 0; offset < 50000; offset += 1000) {
+    const { data, error } = await auth.database.from("questions").select("id, subject, year, prompt")
+      .in("year", years).range(offset, offset + 999);
+    if (error) return response({ error: "Could not check for existing questions before import." }, 500);
+    for (const question of data || []) existingFingerprints.add(questionFingerprint(question));
+    if ((data || []).length < 1000) break;
+  }
+
+  let skipped = 0;
+  const uniqueRows = [];
+  for (const row of rows) {
+    const fingerprint = questionFingerprint(row);
+    if (existingFingerprints.has(fingerprint)) { skipped += 1; continue; }
+    existingFingerprints.add(fingerprint);
+    if (!row.id) row.id = deterministicUuid(`content:${fingerprint}`);
+    uniqueRows.push(row);
+  }
+  if (!uniqueRows.length) return response({ saved: 0, skipped });
+
+  const { data, error } = await auth.database.from("questions").upsert(uniqueRows, { onConflict: "id" }).select("id");
   if (error) return response({ error: "Could not save questions. Confirm the database schema and server secret are configured." }, 500);
-  console.info("Admin question write completed", { adminEmail: auth.adminEmail, count: data?.length ?? rows.length });
-  return response({ saved: data?.length ?? rows.length });
+  console.info("Admin question write completed", { adminEmail: auth.adminEmail, count: data?.length ?? uniqueRows.length, skippedDuplicates: skipped });
+  return response({ saved: data?.length ?? uniqueRows.length, skipped });
 }
 
 export async function DELETE(request) {

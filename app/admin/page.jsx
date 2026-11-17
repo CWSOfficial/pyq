@@ -32,6 +32,12 @@ function demoQuestion(item, index = 0) {
   return { ...question, options: options.map((option) => String(option).trim()) };
 }
 
+function questionFingerprint(question) {
+  const prompt = String(question?.prompt || question?.content?.en?.text || "").replace(/<[^>]*>/g, " ").replace(/&nbsp;/gi, " ").replace(/&amp;/gi, "&").replace(/&lt;/gi, "<").replace(/&gt;/gi, ">");
+  const normalize = (value) => String(value || "").normalize("NFKC").toLocaleLowerCase().replace(/[^\p{L}\p{N}]+/gu, " ").trim().replace(/\s+/g, " ");
+  return `${Number(question?.year || question?.pyq?.year)}|${normalize(question?.subject || question?.pyq?.subject?.title)}|${normalize(prompt)}`;
+}
+
 const emptyQuestion = { subject: "", year: new Date().getFullYear(), topic: "", prompt: "", options: ["", "", "", ""], correct_option: 0, explanation: "", question_number: "" };
 
 function parseCsv(text) {
@@ -179,11 +185,19 @@ export default function AdminPage() {
         return { questions: filtered.slice(pageIndex * 25, pageIndex * 25 + 25), count: filtered.length, page: pageIndex };
       }
       if (options.method === "POST") {
-        const imported = body.type === "single" ? [demoQuestion(body.question)] : getImportQuestions(body.source || body).map(demoQuestion);
-        if (imported.length > 500) throw new Error("A single import can include at most 500 questions.");
+        const incoming = body.type === "single" ? [demoQuestion(body.question)] : getImportQuestions(body.source || body).map(demoQuestion);
+        if (incoming.length > 500) throw new Error("A single import can include at most 500 questions.");
+        const fingerprints = new Set(rows.map(questionFingerprint));
+        const imported = incoming.filter((item) => {
+          const fingerprint = questionFingerprint(item);
+          if (fingerprints.has(fingerprint)) return false;
+          fingerprints.add(fingerprint);
+          return true;
+        });
         const indexed = new Map(rows.map((item) => [item.id, item]));
         imported.forEach((item) => indexed.set(item.id, item)); rows = [...indexed.values()];
-        localStorage.setItem(DEMO_QUESTIONS_KEY, JSON.stringify(rows)); return { saved: imported.length };
+        if (imported.length) localStorage.setItem(DEMO_QUESTIONS_KEY, JSON.stringify(rows));
+        return { saved: imported.length, skipped: incoming.length - imported.length };
       }
       const id = parsedUrl.searchParams.get("id");
       if (options.method === "PATCH") {
@@ -379,7 +393,7 @@ export default function AdminPage() {
     setNotice("");
     try {
       const result = await request("/api/admin/questions", { method: "POST", body: JSON.stringify({ type: "bulk", source: sourceData }) });
-      setNotice(`${result.saved} questions imported or updated from ${total} source records.`);
+      setNotice(`${result.saved} questions imported or updated from ${total} source records.${result.skipped ? ` ${result.skipped} duplicate${result.skipped === 1 ? "" : "s"} skipped.` : ""}`);
       setSourceData(null);
       setSourceFile(null);
       await loadQuestions(0);

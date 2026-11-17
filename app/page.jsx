@@ -177,9 +177,9 @@ function summarizeAttempts(attempts) {
 }
 
 const supabase = createClient();
-// Explicit opt-in supports the requested temporary static sign-in on the live app.
-// Admin authorization stays server-side and does not accept demo sessions.
-const AUTH_DEMO_MODE = process.env.NEXT_PUBLIC_CLIENT_DEMO_MODE === "true" || process.env.NEXT_PUBLIC_AUTH_DEMO_MODE === "true";
+// Client-side demo accounts and their local question bank are for development only.
+// Production must always use the connected Supabase account and question data.
+const AUTH_DEMO_MODE = process.env.NODE_ENV !== "production" && (process.env.NEXT_PUBLIC_CLIENT_DEMO_MODE === "true" || process.env.NEXT_PUBLIC_AUTH_DEMO_MODE === "true");
 const DEMO_USER_KEY = "pyq-demo-user";
 const DEMO_ADMIN_PHONES = new Set((process.env.NEXT_PUBLIC_DEMO_ADMIN_PHONES || "").split(",").map((value) => value.replace(/\D/g, "")).map((digits) => digits.length === 10 ? `91${digits}` : digits).filter(Boolean));
 function isDemoAdminUser(user) {
@@ -557,6 +557,7 @@ export default function Page() {
         return;
       }
       if (event.key === "pyq-demo-questions") {
+        if (!AUTH_DEMO_MODE) return;
         try {
           const rows = JSON.parse(event.newValue || "[]");
           if (Array.isArray(rows)) setQuestions(rows.map((item) => ({ ...item, year: String(item.year), tag: item.topic, answer: Number(item.correct_option) })));

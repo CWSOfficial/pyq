@@ -75,14 +75,6 @@ function PracticeQuestionText({ content }) {
   return <p className="practice-question-text">{formatted}</p>;
 }
 
-function mergeQuestionBankRows(databaseRows = [], localRows = []) {
-  const getKey = (item) => String(item.id || `${item.year}|${item.subject}|${item.question_number}|${item.prompt}`);
-  const rowsById = new Map(localRows.map((item) => [getKey(item), item]));
-  databaseRows.forEach((item) => rowsById.set(getKey(item), item));
-  return [...rowsById.values()].sort((a, b) => Number(b.year) - Number(a.year)
-    || (Number(a.question_number) || Number.MAX_SAFE_INTEGER) - (Number(b.question_number) || Number.MAX_SAFE_INTEGER));
-}
-
 function QuestionCountControl({ id, value, onChange, onDecrease, onIncrease, max = 100 }) {
   return <span className="random-count-control question-count-control">
     <button type="button" aria-label="Decrease question count" onClick={onDecrease}>−</button>
@@ -177,9 +169,9 @@ function summarizeAttempts(attempts) {
 }
 
 const supabase = createClient();
-// Client-side demo accounts and their local question bank are for development only.
-// Production must always use the connected Supabase account and question data.
-const AUTH_DEMO_MODE = process.env.NODE_ENV !== "production" && (process.env.NEXT_PUBLIC_CLIENT_DEMO_MODE === "true" || process.env.NEXT_PUBLIC_AUTH_DEMO_MODE === "true");
+// Keep the configured sign-in behavior, but never mix stale local demo questions
+// into the production question bank loaded from Supabase.
+const AUTH_DEMO_MODE = process.env.NEXT_PUBLIC_CLIENT_DEMO_MODE === "true" || process.env.NEXT_PUBLIC_AUTH_DEMO_MODE === "true";
 const DEMO_USER_KEY = "pyq-demo-user";
 const DEMO_ADMIN_PHONES = new Set((process.env.NEXT_PUBLIC_DEMO_ADMIN_PHONES || "").split(",").map((value) => value.replace(/\D/g, "")).map((digits) => digits.length === 10 ? `91${digits}` : digits).filter(Boolean));
 function isDemoAdminUser(user) {
@@ -450,6 +442,7 @@ export default function Page() {
 
   useEffect(() => {
     const requestedScreen = new URLSearchParams(window.location.search).get("screen");
+    localStorage.removeItem("pyq-demo-questions");
     setBookmarks(readSaved("pyq-bookmarks", []));
     setMistakes(readSaved("pyq-mistakes", []));
     setNotes(readSaved("pyq-notes", []));
@@ -556,27 +549,17 @@ export default function Page() {
         } catch {}
         return;
       }
-      if (event.key === "pyq-demo-questions") {
-        if (!AUTH_DEMO_MODE) return;
-        try {
-          const rows = JSON.parse(event.newValue || "[]");
-          if (Array.isArray(rows)) setQuestions(rows.map((item) => ({ ...item, year: String(item.year), tag: item.topic, answer: Number(item.correct_option) })));
-        } catch {}
-      }
     };
     window.addEventListener("storage", onLocalQuestionBankChange);
     databaseQuestions.then((databaseResult) => {
       if (!active) return;
       const supabaseRows = databaseResult.data || [];
-      const demoRows = AUTH_DEMO_MODE ? readSaved("pyq-demo-questions", []) : [];
-      const sourceRows = AUTH_DEMO_MODE ? mergeQuestionBankRows(supabaseRows, demoRows) : supabaseRows;
-      setQuestions(sourceRows.map((item) => ({ ...item, year: String(item.year), tag: item.topic, answer: item.correct_option })));
+      setQuestions(supabaseRows.map((item) => ({ ...item, year: String(item.year), tag: item.topic, answer: item.correct_option })));
     }).catch((error) => {
       if (!active) return;
-      const demoRows = AUTH_DEMO_MODE ? readSaved("pyq-demo-questions", []) : [];
-      setQuestions(demoRows.map((item) => ({ ...item, year: String(item.year), tag: item.topic, answer: Number(item.correct_option) })));
+      setQuestions([]);
       console.error("Could not load questions from Supabase", error);
-      if (!demoRows.length) setToast("Could not load questions from the question bank. Please try again.");
+      setToast("Could not load questions from the question bank. Please try again.");
     });
     const onInstall = (event) => { event.preventDefault(); setInstallPrompt(event); };
     const onInstalled = () => { setInstallPrompt(null); setIsInstalledApp(true); setToast("PYQ Cloud was added to your home screen."); };
@@ -613,9 +596,7 @@ export default function Page() {
           if ((data || []).length < pageSize) break;
         }
         if (active) {
-          const demoRows = AUTH_DEMO_MODE ? readSaved("pyq-demo-questions", []) : [];
-          const latestRows = AUTH_DEMO_MODE ? mergeQuestionBankRows(rows, demoRows) : rows;
-          setQuestions(latestRows.map((item) => ({ ...item, year: String(item.year), tag: item.topic, answer: item.correct_option })));
+          setQuestions(rows.map((item) => ({ ...item, year: String(item.year), tag: item.topic, answer: item.correct_option })));
         }
       } catch (error) {
         console.error("Could not refresh the question bank", error);

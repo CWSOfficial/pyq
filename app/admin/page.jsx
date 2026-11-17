@@ -5,7 +5,6 @@ import { createClient } from "../../lib/supabase/client";
 
 const AUTH_DEMO_MODE = process.env.NEXT_PUBLIC_CLIENT_DEMO_MODE === "true" || process.env.NEXT_PUBLIC_AUTH_DEMO_MODE === "true";
 const DEMO_USER_KEY = "pyq-demo-user";
-const DEMO_QUESTIONS_KEY = "pyq-demo-questions";
 const DEMO_MUSIC_KEY = "pyq-demo-music";
 const DEMO_CATALOG_KEY = "pyq-demo-catalog";
 const DEFAULT_SUBJECTS = ["Polity", "Economy", "Geography", "History", "Art and Culture", "International relations", "Science and Technology", "Environment", "Current Affairs", "Miscellaneous"];
@@ -21,21 +20,6 @@ function isDemoAdmin(user) {
   const digits = String(user?.phone || "").replace(/\D/g, "");
   const normalizedPhone = digits.length === 10 ? `91${digits}` : digits;
   return Boolean(user?.is_demo && (user.email === "pyqcloud@gmail.com" || DEMO_ADMIN_PHONES.has(normalizedPhone)));
-}
-
-function demoQuestion(item, index = 0) {
-  const english = item?.content?.en;
-  const options = english?.options || item?.options || [];
-  const answers = item?.correctOptionIndexes || [item?.answer ?? item?.correct_option];
-  const question = { id: item?.id && /^[0-9a-f-]{36}$/i.test(item.id) ? item.id : crypto.randomUUID(), subject: item?.pyq?.subject?.title || item?.subject || "", year: Number(item?.pyq?.year || item?.year), exam: item?.exam || "UPSC CSE Prelims", topic: item?.pyq?.topic?.title || item?.topic || "General Studies", prompt: english?.text || item?.prompt || "", options, correct_option: Number(answers?.[0]), explanation: english?.explanation || item?.explanation || "", question_number: Number(item?.pyq?.number || item?.question_number) || index + 1 };
-  if (!question.subject.trim() || !Number.isInteger(question.year) || question.year < 1900 || question.year > 2100 || !question.prompt.trim() || !Array.isArray(options) || options.length !== 4 || options.some((option) => !String(option).trim()) || !Number.isInteger(question.correct_option) || question.correct_option < 0 || question.correct_option > 3) throw new Error(`Question ${index + 1} needs a subject, valid year, prompt, four options and a correct answer.`);
-  return { ...question, options: options.map((option) => String(option).trim()) };
-}
-
-function questionFingerprint(question) {
-  const prompt = String(question?.prompt || question?.content?.en?.text || "").replace(/<[^>]*>/g, " ").replace(/&nbsp;/gi, " ").replace(/&amp;/gi, "&").replace(/&lt;/gi, "<").replace(/&gt;/gi, ">");
-  const normalize = (value) => String(value || "").normalize("NFKC").toLocaleLowerCase().replace(/[^\p{L}\p{N}]+/gu, " ").trim().replace(/\s+/g, " ");
-  return `${Number(question?.year || question?.pyq?.year)}|${normalize(question?.subject || question?.pyq?.subject?.title)}|${normalize(prompt)}`;
 }
 
 const emptyQuestion = { subject: "", year: new Date().getFullYear(), topic: "", prompt: "", options: ["", "", "", ""], correct_option: 0, explanation: "", question_number: "" };
@@ -110,12 +94,15 @@ export default function AdminPage() {
     const accessToken = data.session?.access_token;
     if (!accessToken && AUTH_DEMO_MODE) {
       const demoUser = JSON.parse(localStorage.getItem(DEMO_USER_KEY) || "null");
-      if (!isDemoAdmin(demoUser)) throw new Error("Sign in with an authorized local demo admin account to manage the demo question bank.");
+      if (!isDemoAdmin(demoUser)) throw new Error("Sign in with an authorized local demo admin account.");
       const parsedUrl = new URL(url, window.location.origin);
-      const storedRows = localStorage.getItem(DEMO_QUESTIONS_KEY);
-      let rows = storedRows ? JSON.parse(storedRows) : [];
-      if (!storedRows && parsedUrl.pathname === "/api/admin/questions") {
-        rows = [];
+      const isQuestionEndpoint = parsedUrl.pathname === "/api/admin/questions";
+      if (isQuestionEndpoint && options.method && options.method !== "GET") {
+        throw new Error("Adding, editing, or deleting questions requires a verified Supabase admin sign-in.");
+      }
+      const body = JSON.parse(options.body || "{}");
+      const rows = [];
+      if (isQuestionEndpoint || parsedUrl.pathname === "/api/admin/catalog") {
         for (let offset = 0; offset < 5000; offset += 1000) {
           const { data, error } = await supabase.from("questions")
             .select("id, subject, year, exam, topic, prompt, options, correct_option, explanation, question_number")
@@ -125,9 +112,7 @@ export default function AdminPage() {
           rows.push(...(data || []));
           if ((data || []).length < 1000) break;
         }
-        localStorage.setItem(DEMO_QUESTIONS_KEY, JSON.stringify(rows));
       }
-      const body = JSON.parse(options.body || "{}");
       if (parsedUrl.pathname === "/api/admin/users") throw new Error("Registered user records are not available in local demo mode. Configure the Supabase server key to manage real accounts.");
       if (parsedUrl.pathname === "/api/admin/catalog") {
         const readDemoCatalog = () => {
@@ -184,28 +169,6 @@ export default function AdminPage() {
         const filtered = rows.filter((question) => (!year || String(question.year) === year) && (!subject || question.subject.toLowerCase().includes(subject)) && (!query || `${question.prompt} ${question.topic} ${question.exam}`.toLowerCase().includes(query)));
         return { questions: filtered.slice(pageIndex * 25, pageIndex * 25 + 25), count: filtered.length, page: pageIndex };
       }
-      if (options.method === "POST") {
-        const incoming = body.type === "single" ? [demoQuestion(body.question)] : getImportQuestions(body.source || body).map(demoQuestion);
-        if (incoming.length > 500) throw new Error("A single import can include at most 500 questions.");
-        const fingerprints = new Set(rows.map(questionFingerprint));
-        const imported = incoming.filter((item) => {
-          const fingerprint = questionFingerprint(item);
-          if (fingerprints.has(fingerprint)) return false;
-          fingerprints.add(fingerprint);
-          return true;
-        });
-        const indexed = new Map(rows.map((item) => [item.id, item]));
-        imported.forEach((item) => indexed.set(item.id, item)); rows = [...indexed.values()];
-        if (imported.length) localStorage.setItem(DEMO_QUESTIONS_KEY, JSON.stringify(rows));
-        return { saved: imported.length, skipped: incoming.length - imported.length };
-      }
-      const id = parsedUrl.searchParams.get("id");
-      if (options.method === "PATCH") {
-        const index = rows.findIndex((item) => item.id === id);
-        if (index < 0) throw new Error("Question not found in this local demo.");
-        rows[index] = { ...demoQuestion(body.question), id }; localStorage.setItem(DEMO_QUESTIONS_KEY, JSON.stringify(rows)); return { updated: true };
-      }
-      if (options.method === "DELETE") { rows = rows.filter((item) => item.id !== id); localStorage.setItem(DEMO_QUESTIONS_KEY, JSON.stringify(rows)); return { removed: true }; }
       throw new Error("Unsupported local demo action.");
     }
     if (!accessToken) throw new Error("Sign in to continue.");
@@ -316,6 +279,7 @@ export default function AdminPage() {
 
   useEffect(() => {
     let active = true;
+    localStorage.removeItem("pyq-demo-questions");
     supabase.auth.getSession().then(({ data }) => {
       if (!active) return;
       setSession(data.session);

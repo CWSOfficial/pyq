@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import { NextResponse } from "next/server";
-import { createClient } from "@supabase/supabase-js";
+import { authorizeAdmin } from "../../../../lib/supabase/admin-server";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -11,44 +11,6 @@ const UUID_NAMESPACE = Buffer.from("9a7d3b18e42d4c89a9c1730f5c4b28d1", "hex");
 
 function response(body, status = 200) {
   return NextResponse.json(body, { status, headers: { "Cache-Control": "no-store" } });
-}
-
-function getConfiguration() {
-  const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
-  const publishableKey = process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY;
-  const secretKey = process.env.SUPABASE_SECRET_KEY || process.env.SUPABASE_SERVICE_ROLE_KEY;
-  const emailAllowlist = (process.env.PYQ_ADMIN_EMAILS || "").split(",").map((email) => email.trim().toLowerCase()).filter(Boolean);
-  const phoneAllowlist = (process.env.PYQ_ADMIN_PHONES || "").split(",").map(normalizePhone).filter(Boolean);
-  if (!url || !publishableKey || !secretKey || (!emailAllowlist.length && !phoneAllowlist.length)) return null;
-  return { url, publishableKey, secretKey, emailAllowlist, phoneAllowlist };
-}
-
-function normalizePhone(value = "") {
-  const digits = String(value).replace(/\D/g, "");
-  return digits.length === 10 ? `91${digits}` : digits;
-}
-
-async function authorize(request) {
-  const config = getConfiguration();
-  if (!config) return { error: response({ error: "Admin access is not configured on this deployment." }, 503) };
-  const token = request.headers.get("authorization")?.match(/^Bearer\s+(.+)$/i)?.[1];
-  if (!token) return { error: response({ error: "Sign in to continue." }, 401) };
-
-  const authClient = createClient(config.url, config.publishableKey, {
-    auth: { autoRefreshToken: false, persistSession: false, detectSessionInUrl: false },
-  });
-  const { data, error } = await authClient.auth.getUser(token);
-  if (error || !data?.user) return { error: response({ error: "Your session is invalid or expired. Sign in again." }, 401) };
-  const verifiedEmailAdmin = Boolean(data.user.email && data.user.email_confirmed_at && config.emailAllowlist.includes(data.user.email.toLowerCase()));
-  const verifiedPhoneAdmin = Boolean(data.user.phone && data.user.phone_confirmed_at && config.phoneAllowlist.includes(normalizePhone(data.user.phone)));
-  if (!verifiedEmailAdmin && !verifiedPhoneAdmin) {
-    return { error: response({ error: "This account is not authorized to use the admin panel." }, 403) };
-  }
-
-  const database = createClient(config.url, config.secretKey, {
-    auth: { autoRefreshToken: false, persistSession: false, detectSessionInUrl: false },
-  });
-  return { database, adminEmail: data.user.email || data.user.phone };
 }
 
 function deterministicUuid(sourceId) {
@@ -151,7 +113,7 @@ function parseInput(body) {
 }
 
 export async function GET(request) {
-  const auth = await authorize(request);
+  const auth = await authorizeAdmin(request);
   if (auth.error) return auth.error;
   const { searchParams } = new URL(request.url);
   const page = Math.max(0, Math.min(10000, Number.parseInt(searchParams.get("page") || "0", 10) || 0));
@@ -175,7 +137,7 @@ export async function GET(request) {
 }
 
 export async function PATCH(request) {
-  const auth = await authorize(request);
+  const auth = await authorizeAdmin(request);
   if (auth.error) return auth.error;
   const id = new URL(request.url).searchParams.get("id") || "";
   if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(id)) return response({ error: "Choose a valid question." }, 400);
@@ -193,7 +155,7 @@ export async function PATCH(request) {
 }
 
 export async function POST(request) {
-  const auth = await authorize(request);
+  const auth = await authorizeAdmin(request);
   if (auth.error) return auth.error;
   const bodySize = Number(request.headers.get("content-length") || 0);
   if (bodySize > MAX_BODY_BYTES) return response({ error: "The upload is too large. Keep JSON imports under 8 MB." }, 413);
@@ -235,7 +197,7 @@ export async function POST(request) {
 }
 
 export async function DELETE(request) {
-  const auth = await authorize(request);
+  const auth = await authorizeAdmin(request);
   if (auth.error) return auth.error;
   const id = new URL(request.url).searchParams.get("id") || "";
   if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(id)) return response({ error: "Choose a valid question." }, 400);

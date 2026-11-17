@@ -1,29 +1,12 @@
 import { NextResponse } from "next/server";
-import { createClient } from "@supabase/supabase-js";
+import { authorizeAdmin } from "../../../../../lib/supabase/admin-server";
 
 export const dynamic = "force-dynamic";
 const response = (body, status = 200) => NextResponse.json(body, { status, headers: { "Cache-Control": "no-store" } });
-const normalizePhone = (value = "") => {
-  const digits = String(value).replace(/\D/g, "");
-  return digits.length === 10 ? `91${digits}` : digits;
-};
-
 async function authorize(request) {
-  const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
-  const publishableKey = process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY;
-  const secretKey = process.env.SUPABASE_SECRET_KEY || process.env.SUPABASE_SERVICE_ROLE_KEY;
-  const emailAllowlist = (process.env.PYQ_ADMIN_EMAILS || "").split(",").map((item) => item.trim().toLowerCase()).filter(Boolean);
-  const phoneAllowlist = (process.env.PYQ_ADMIN_PHONES || "").split(",").map(normalizePhone).filter(Boolean);
-  if (!url || !publishableKey || !secretKey || (!emailAllowlist.length && !phoneAllowlist.length)) return { error: response({ error: "Admin access is not configured on this deployment." }, 503) };
-  const token = request.headers.get("authorization")?.match(/^Bearer\s+(.+)$/i)?.[1];
-  if (!token) return { error: response({ error: "Sign in to continue." }, 401) };
-  const authClient = createClient(url, publishableKey, { auth: { autoRefreshToken: false, persistSession: false } });
-  const { data, error } = await authClient.auth.getUser(token);
-  if (error || !data?.user) return { error: response({ error: "Your session is invalid or expired." }, 401) };
-  const verifiedEmailAdmin = Boolean(data.user.email && data.user.email_confirmed_at && emailAllowlist.includes(data.user.email.toLowerCase()));
-  const verifiedPhoneAdmin = Boolean(data.user.phone && data.user.phone_confirmed_at && phoneAllowlist.includes(normalizePhone(data.user.phone)));
-  if (!verifiedEmailAdmin && !verifiedPhoneAdmin) return { error: response({ error: "This account is not authorized to manage music settings." }, 403) };
-  return { database: createClient(url, secretKey, { auth: { autoRefreshToken: false, persistSession: false } }), email: data.user.email || data.user.phone };
+  const auth = await authorizeAdmin(request);
+  if (auth.error) return auth;
+  return { ...auth, email: auth.user.email || auth.user.phone };
 }
 
 export async function PUT(request) {

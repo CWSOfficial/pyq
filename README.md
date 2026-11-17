@@ -15,13 +15,14 @@ Required client variables are `NEXT_PUBLIC_SUPABASE_URL` and `NEXT_PUBLIC_SUPABA
 ## Supabase and questions
 
 - Initial schema and RLS policies: `supabase/migrations/20261016000100_initial_schema.sql`.
+- Profile roles: apply `supabase/migrations/20261117212824_profile_roles.sql` before deploying role-based admin authorization. New profiles default to `user`; set a verified account's `public.profiles.role` to `admin` in the Supabase Table Editor to grant access.
 - The app loads the question bank from Supabase. Admin uploads accept JSON or CSV and save imported questions to Supabase.
 - Admin question workspace: `/admin`. Add questions, review the bank, import a supplied JSON or CSV file, or remove unused questions.
 - Admins can search by question/topic/exam, filter by subject and year, edit individual questions, and bulk import JSON or CSV files (up to 500 questions per upload). CSV headers: `subject,year,topic,exam,prompt,option_a,option_b,option_c,option_d,correct_option,explanation,question_number`; `correct_option` accepts `0`–`3` or `A`–`D`.
 - Admin music controls enable or disable the focus loop, set a same-origin `/audio/...` path or HTTPS audio URL, and adjust volume. Apply `supabase/migrations/20261027000100_app_settings.sql` before saving music changes.
 - Apply `supabase/admin_question_permissions.sql` in the target project if its `service_role` table grants do not already permit the server-side admin actions.
 
-To enable the admin API, set server-only `SUPABASE_SECRET_KEY` and at least one of `PYQ_ADMIN_EMAILS` or `PYQ_ADMIN_PHONES` in the deployment environment. Email and phone allowlists accept comma-separated values; phone numbers are matched by digits, and ten-digit Indian numbers are normalized with country code `91`. The server verifies each bearer token with Supabase and requires the matching email or phone to be confirmed before allowing question or music changes. Keep the secret key out of all `NEXT_PUBLIC_` variables and source control. Add the same allowlist variables to the hosting provider before deploying.
+The admin API checks the authenticated user's `role` in `public.profiles` on every request and requires a verified email or phone. Keep the server-only `SUPABASE_SECRET_KEY` out of all `NEXT_PUBLIC_` variables and source control. Admin grants are stored in Supabase, not a deployment allowlist.
 
 ## Supplied assets
 
